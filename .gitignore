@@ -1,1 +1,4 @@
 .idea
+datasets/
+buffers/
+__pycache__/

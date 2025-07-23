@@ -32,8 +32,9 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     eval_it_pool = np.arange(0, args.Iteration + 1, args.eval_it).tolist()
-    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, args.subset, args=args)
-    model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
+
+    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, subset=None, args=args)
+    model_eval_pool = get_eval_pool('F', args.model, args.model)
 
     im_res = im_size[0]
 
@@ -362,7 +363,10 @@ def main(args):
                 forward_params = student_params[-1].unsqueeze(0).expand(torch.cuda.device_count(), -1)
             else:
                 forward_params = student_params[-1]
-            x = student_net(x, flat_param=forward_params)
+            if args.model == 'ArcFace':
+                x = student_net(x, this_y, flat_param=forward_params)
+            else:
+                x = student_net(x, flat_param=forward_params)
             ce_loss = criterion(x, this_y)
 
             grad = torch.autograd.grad(ce_loss, student_params[-1], create_graph=True)[0]
@@ -410,11 +414,11 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
 
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
+    parser.add_argument('--dataset', type=str, default='LFW', help='dataset')
 
     parser.add_argument('--subset', type=str, default='imagenette', help='ImageNet subset. This only does anything when --dataset=ImageNet')
 
-    parser.add_argument('--model', type=str, default='ConvNet', help='model')
+    parser.add_argument('--model', type=str, default='FaceNet', help='model')
 
     parser.add_argument('--res', type=int, default=128, help='resolution for imagenet')
 
