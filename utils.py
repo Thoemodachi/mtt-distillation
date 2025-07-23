@@ -9,168 +9,147 @@ import torch.nn.functional as F
 import os
 import kornia as K
 import tqdm
-from torch.utils.data import Dataset
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import datasets, transforms
+from torchvision.datasets import ImageFolder, LFWPairs, CelebA
 from scipy.ndimage.interpolation import rotate as scipyrotate
-from networks import MLP, ConvNet, LeNet, AlexNet, VGG11BN, VGG11, ResNet18, ResNet18BN_AP, ResNet18_AP
+from networks import FaceNet, VGGFace, ArcFaceNet
 
-class Config:
-    imagenette = [0, 217, 482, 491, 497, 566, 569, 571, 574, 701]
+class MSCelebDataset(Dataset):
+    def __init__(self, root_dir, transform=None):
+        """
+        Args:
+            root_dir (string): Directory with all the images.
+            transform (callable, optional): Optional transform to be applied on a sample.
+        """
+        self.root_dir = root_dir
+        self.transform = transform
+        self.image_folder = ImageFolder(root=root_dir, transform=transform)
+        self.class_to_idx = self.image_folder.class_to_idx
+        self.img_paths = self.image_folder.imgs
 
-    # ["australian_terrier", "border_terrier", "samoyed", "beagle", "shih-tzu", "english_foxhound", "rhodesian_ridgeback", "dingo", "golden_retriever", "english_sheepdog"]
-    imagewoof = [193, 182, 258, 162, 155, 167, 159, 273, 207, 229]
+    def __len__(self):
+        return len(self.img_paths)
 
-    # ["tabby_cat", "bengal_cat", "persian_cat", "siamese_cat", "egyptian_cat", "lion", "tiger", "jaguar", "snow_leopard", "lynx"]
-    imagemeow = [281, 282, 283, 284, 285, 291, 292, 290, 289, 287]
+    def __getitem__(self, idx):
+        img_path, label = self.img_paths[idx]
+        image = Image.open(img_path).convert('RGB')
+        if self.transform:
+            image = self.transform(image)
+        return image, label
 
-    # ["peacock", "flamingo", "macaw", "pelican", "king_penguin", "bald_eagle", "toucan", "ostrich", "black_swan", "cockatoo"]
-    imagesquawk = [84, 130, 88, 144, 145, 22, 96, 9, 100, 89]
+def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
+    """
+    Returns the dataset and associated configurations for facial recognition tasks.
 
-    # ["pineapple", "banana", "strawberry", "orange", "lemon", "pomegranate", "fig", "bell_pepper", "cucumber", "green_apple"]
-    imagefruit = [953, 954, 949, 950, 951, 957, 952, 945, 943, 948]
+    Args:
+        dataset_name (str): Name of the dataset ('LFW', 'CelebA', 'MS-Celeb-1M').
+        data_path (str): Path to the dataset directory.
+        batch_size (int): Batch size for data loaders.
+        subset (str, optional): Specific subset of the dataset to use (e.g., 'train', 'test').
+        args (Namespace, optional): Additional arguments, including 'zca' for ZCA whitening.
 
-    # ["bee", "ladys slipper", "banana", "lemon", "corn", "school_bus", "honeycomb", "lion", "garden_spider", "goldfinch"]
-    imageyellow = [309, 986, 954, 951, 987, 779, 599, 291, 72, 11]
+    Returns:
+        tuple: Contains dataset configurations and data loaders.
+    """
+    # Initialize variables
+    channel, im_size, num_classes, class_names, mean, std = None, None, None, None, None, None
+    transform = None
+    dataset_train, dataset_test = None, None
+    loader_train_dict, loader_test = None, None
 
-    dict = {
-        "imagenette" : imagenette,
-        "imagewoof" : imagewoof,
-        "imagefruit": imagefruit,
-        "imageyellow": imageyellow,
-        "imagemeow": imagemeow,
-        "imagesquawk": imagesquawk,
-    }
+    # Define common transformations
+    if args.zca:
+        transform = transforms.Compose([transforms.ToTensor()])
+    else:
+        transform = transforms.Compose([
+            transforms.Resize(im_size),
+            transforms.CenterCrop(im_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std)
+        ])
 
-config = Config()
-
-def get_dataset(dataset, data_path, batch_size=1, subset="imagenette", args=None):
-
-    class_map = None
-    loader_train_dict = None
-    class_map_inv = None
-
-    if dataset == 'CIFAR10':
+    # Dataset-specific configurations
+    if dataset_name == 'LFW':
         channel = 3
-        im_size = (32, 32)
-        num_classes = 10
-        mean = [0.4914, 0.4822, 0.4465]
-        std = [0.2023, 0.1994, 0.2010]
-        if args.zca:
-            transform = transforms.Compose([transforms.ToTensor()])
-        else:
-            transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
-        dst_train = datasets.CIFAR10(data_path, train=True, download=True, transform=transform) # no augmentation
-        dst_test = datasets.CIFAR10(data_path, train=False, download=True, transform=transform)
-        class_names = dst_train.classes
-        class_map = {x:x for x in range(num_classes)}
-
-
-    elif dataset == 'Tiny':
-        channel = 3
-        im_size = (64, 64)
-        num_classes = 200
+        im_size = (250, 250)
+        num_classes = 5749  # Number of identities
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        if args.zca:
-            transform = transforms.Compose([transforms.ToTensor()])
-        else:
-            transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
-        dst_train = datasets.ImageFolder(os.path.join(data_path, "train"), transform=transform) # no augmentation
-        dst_test = datasets.ImageFolder(os.path.join(data_path, "val", "images"), transform=transform)
-        class_names = dst_train.classes
-        class_map = {x:x for x in range(num_classes)}
+        dataset_train = LFWPairs(root=data_path, split='train', transform=transform, download=True)
+        dataset_test = LFWPairs(root=data_path, split='test', transform=transform, download=True)
+        class_names = dataset_train.classes
 
-
-    elif dataset == 'ImageNet':
+    elif dataset_name == 'CelebA':
         channel = 3
-        im_size = (128, 128)
-        num_classes = 10
-
-        config.img_net_classes = config.dict[subset]
-
+        im_size = (178, 218)
+        num_classes = 40  # Number of attributes or identities
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        if args.zca:
-            transform = transforms.Compose([transforms.ToTensor(),
-                                        transforms.Resize(im_size),
-                                        transforms.CenterCrop(im_size)])
-        else:
-            transform = transforms.Compose([transforms.ToTensor(),
-                                            transforms.Normalize(mean=mean, std=std),
-                                            transforms.Resize(im_size),
-                                            transforms.CenterCrop(im_size)])
+        dataset_train = CelebA(root=data_path, split='train', transform=transform, download=True)
+        dataset_test = CelebA(root=data_path, split='test', transform=transform, download=True)
+        class_names = dataset_train.classes
 
-        dst_train = datasets.ImageNet(data_path, split="train", transform=transform) # no augmentation
-        dst_train_dict = {c : torch.utils.data.Subset(dst_train, np.squeeze(np.argwhere(np.equal(dst_train.targets, config.img_net_classes[c])))) for c in range(len(config.img_net_classes))}
-        dst_train = torch.utils.data.Subset(dst_train, np.squeeze(np.argwhere(np.isin(dst_train.targets, config.img_net_classes))))
-        loader_train_dict = {c : torch.utils.data.DataLoader(dst_train_dict[c], batch_size=batch_size, shuffle=True, num_workers=16) for c in range(len(config.img_net_classes))}
-        dst_test = datasets.ImageNet(data_path, split="val", transform=transform)
-        dst_test = torch.utils.data.Subset(dst_test, np.squeeze(np.argwhere(np.isin(dst_test.targets, config.img_net_classes))))
-        for c in range(len(config.img_net_classes)):
-            dst_test.dataset.targets[dst_test.dataset.targets == config.img_net_classes[c]] = c
-            dst_train.dataset.targets[dst_train.dataset.targets == config.img_net_classes[c]] = c
-        print(dst_test.dataset)
-        class_map = {x: i for i, x in enumerate(config.img_net_classes)}
-        class_map_inv = {i: x for i, x in enumerate(config.img_net_classes)}
-        class_names = None
-
-
-    elif dataset.startswith('CIFAR100'):
+    elif dataset_name == 'MS-Celeb-1M':
         channel = 3
-        im_size = (32, 32)
-        num_classes = 100
-        mean = [0.4914, 0.4822, 0.4465]
-        std = [0.2023, 0.1994, 0.2010]
+        im_size = (112, 112)
+        num_classes = 94682  # Number of celebrities
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
+        transform = transforms.Compose([
+            transforms.Resize(im_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        train_dataset = MSCelebDataset(root_dir=os.path.join(data_path, 'train'), transform=transform)
+        val_dataset = MSCelebDataset(root_dir=os.path.join(data_path, 'val'), transform=transform)
+        test_dataset = MSCelebDataset(root_dir=os.path.join(data_path, 'test'), transform=transform)
+        loader_train_dict = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+        loader_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+        class_map = {i: cls for i, cls in enumerate(train_dataset.image_folder.classes)}
+        class_map_inv = {v: k for k, v in class_map.items()}
+        class_names = train_dataset.image_folder.classes
 
-        if args.zca:
-            transform = transforms.Compose([transforms.ToTensor()])
-        else:
-            transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
-        dst_train = datasets.CIFAR100(data_path, train=True, download=True, transform=transform)  # no augmentation
-        dst_test = datasets.CIFAR100(data_path, train=False, download=True, transform=transform)
-        class_names = dst_train.classes
-        class_map = {x: x for x in range(num_classes)}
 
     else:
-        exit('unknown dataset: %s'%dataset)
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
 
+    # Apply ZCA Whitening if specified
     if args.zca:
         images = []
         labels = []
-        print("Train ZCA")
-        for i in tqdm.tqdm(range(len(dst_train))):
-            im, lab = dst_train[i]
+        print("Applying ZCA Whitening to training data")
+        for i in tqdm(range(len(dataset_train))):
+            im, lab = dataset_train[i]
             images.append(im)
             labels.append(lab)
         images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
+        labels = torch.tensor(labels, dtype=torch.long, device=args.device)
         zca = K.enhance.ZCAWhitening(eps=0.1, compute_inv=True)
         zca.fit(images)
-        zca_images = zca(images).to("cpu")
-        dst_train = TensorDataset(zca_images, labels)
+        zca_images = zca(images).to(args.device)
+        dataset_train = TensorDataset(zca_images, labels)
 
         images = []
         labels = []
-        print("Test ZCA")
-        for i in tqdm.tqdm(range(len(dst_test))):
-            im, lab = dst_test[i]
+        print("Applying ZCA Whitening to test data")
+        for i in tqdm(range(len(dataset_test))):
+            im, lab = dataset_test[i]
             images.append(im)
             labels.append(lab)
         images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
-
-        zca_images = zca(images).to("cpu")
-        dst_test = TensorDataset(zca_images, labels)
+        labels = torch.tensor(labels, dtype=torch.long, device=args.device)
+        zca_images = zca(images).to(args.device)
+        dataset_test = TensorDataset(zca_images, labels)
 
         args.zca_trans = zca
 
+    # Create DataLoaders
+    loader_train_dict = DataLoader(dataset_train, batch_size=batch_size, shuffle=True, num_workers=4)
+    loader_test = DataLoader(dataset_test, batch_size=batch_size, shuffle=False, num_workers=4)
 
-    testloader = torch.utils.data.DataLoader(dst_test, batch_size=128, shuffle=False, num_workers=2)
-
-
-    return channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv
-
-
+    return channel, im_size, num_classes, class_names, mean, std, dataset_train, dataset_test, loader_train_dict, loader_test
 
 class TensorDataset(Dataset):
     def __init__(self, images, labels): # images: n x c x h x w tensor
@@ -195,86 +174,12 @@ def get_network(model, channel, num_classes, im_size=(32, 32), dist=True):
     torch.random.manual_seed(int(time.time() * 1000) % 100000)
     net_width, net_depth, net_act, net_norm, net_pooling = get_default_convnet_setting()
 
-    if model == 'MLP':
-        net = MLP(channel=channel, num_classes=num_classes)
-    elif model == 'ConvNet':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'LeNet':
-        net = LeNet(channel=channel, num_classes=num_classes)
-    elif model == 'AlexNet':
-        net = AlexNet(channel=channel, num_classes=num_classes)
-    elif model == 'VGG11':
-        net = VGG11( channel=channel, num_classes=num_classes)
-    elif model == 'VGG11BN':
-        net = VGG11BN(channel=channel, num_classes=num_classes)
-    elif model == 'ResNet18':
-        net = ResNet18(channel=channel, num_classes=num_classes)
-    elif model == 'ResNet18BN_AP':
-        net = ResNet18BN_AP(channel=channel, num_classes=num_classes)
-    elif model == 'ResNet18_AP':
-        net = ResNet18_AP(channel=channel, num_classes=num_classes)
-
-    elif model == 'ConvNetD1':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=1, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD2':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=2, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD3':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=3, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD4':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=4, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD5':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=5, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD6':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=6, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD7':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=7, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-    elif model == 'ConvNetD8':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=8, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling, im_size=im_size)
-
-
-    elif model == 'ConvNetW32':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=32, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetW64':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=64, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetW128':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=128, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetW256':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=256, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetW512':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=512, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetW1024':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=1024, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling=net_pooling)
-
-    elif model == "ConvNetKIP":
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=1024, net_depth=net_depth, net_act=net_act,
-                      net_norm="none", net_pooling=net_pooling)
-
-    elif model == 'ConvNetAS':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act='sigmoid', net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetAR':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act='relu', net_norm=net_norm, net_pooling=net_pooling)
-    elif model == 'ConvNetAL':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act='leakyrelu', net_norm=net_norm, net_pooling=net_pooling)
-
-    elif model == 'ConvNetNN':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm='none', net_pooling=net_pooling)
-    elif model == 'ConvNetBN':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm='batchnorm', net_pooling=net_pooling)
-    elif model == 'ConvNetLN':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm='layernorm', net_pooling=net_pooling)
-    elif model == 'ConvNetIN':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm='instancenorm', net_pooling=net_pooling)
-    elif model == 'ConvNetGN':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm='groupnorm', net_pooling=net_pooling)
-
-    elif model == 'ConvNetNP':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling='none')
-    elif model == 'ConvNetMP':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling='maxpooling')
-    elif model == 'ConvNetAP':
-        net = ConvNet(channel=channel, num_classes=num_classes, net_width=net_width, net_depth=net_depth, net_act=net_act, net_norm=net_norm, net_pooling='avgpooling')
-
-
+    if model == 'FaceNet':
+        net = FaceNet(num_classes=num_classes)
+    elif model == 'VGGFace':
+        net = VGGFace(num_classes=num_classes)
+    elif model == 'ArcFace':
+        net = ArcFaceNet(num_classes=num_classes)    
     else:
         net = None
         exit('DC error: unknown model')
@@ -301,9 +206,6 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
     loss_avg, acc_avg, num_exp = 0, 0, 0
     net = net.to(args.device)
 
-    if args.dataset == "ImageNet":
-        class_map = {x: i for i, x in enumerate(config.img_net_classes)}
-
     if mode == 'train':
         net.train()
     else:
@@ -322,9 +224,6 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
                 img = DiffAugment(img, args.dsa_strategy, param=args.dsa_param)
             else:
                 img = augment(img, args.dc_aug_param, device=args.device)
-
-        if args.dataset == "ImageNet" and mode != "train":
-            lab = torch.tensor([class_map[x.item()] for x in lab]).to(args.device)
 
         n_b = lab.shape[0]
 
@@ -473,28 +372,27 @@ def get_daparam(dataset, model, model_eval, ipc):
 
 
 def get_eval_pool(eval_mode, model, model_eval):
-    if eval_mode == 'M': # multiple architectures
-        # model_eval_pool = ['MLP', 'ConvNet', 'AlexNet', 'VGG11', 'ResNet18', 'LeNet']
-        model_eval_pool = ['ConvNet', 'AlexNet', 'VGG11', 'ResNet18_AP', 'ResNet18']
-        # model_eval_pool = ['MLP', 'ConvNet', 'AlexNet', 'VGG11', 'ResNet18']
-    elif eval_mode == 'W': # ablation study on network width
-        model_eval_pool = ['ConvNetW32', 'ConvNetW64', 'ConvNetW128', 'ConvNetW256']
-    elif eval_mode == 'D': # ablation study on network depth
-        model_eval_pool = ['ConvNetD1', 'ConvNetD2', 'ConvNetD3', 'ConvNetD4']
-    elif eval_mode == 'A': # ablation study on network activation function
-        model_eval_pool = ['ConvNetAS', 'ConvNetAR', 'ConvNetAL']
-    elif eval_mode == 'P': # ablation study on network pooling layer
-        model_eval_pool = ['ConvNetNP', 'ConvNetMP', 'ConvNetAP']
-    elif eval_mode == 'N': # ablation study on network normalization layer
-        model_eval_pool = ['ConvNetNN', 'ConvNetBN', 'ConvNetLN', 'ConvNetIN', 'ConvNetGN']
-    elif eval_mode == 'S': # itself
-        model_eval_pool = [model[:model.index('BN')]] if 'BN' in model else [model]
-    elif eval_mode == 'C':
-        model_eval_pool = [model, 'ConvNet']
+    """
+    Return the list of face-recognition models to evaluate based on the eval_mode flag.
+
+    Args:
+        eval_mode (str): 
+            'F' - use all face-recognition models;
+            'S' - evaluate only the current model;
+            default - evaluate the fallback model_eval.
+        model (str): Name of the primary model (e.g., 'FaceNet').
+        model_eval (str): Fallback model name if eval_mode is unspecified.
+
+    Returns:
+        List[str]: Model names for evaluation.
+    """
+    if eval_mode == 'F':
+        model_eval_pool = ['FaceNet', 'VGGFace', 'ArcFace']
+    elif eval_mode == 'S':
+        model_eval_pool = [model]
     else:
         model_eval_pool = [model_eval]
     return model_eval_pool
-
 
 class ParamDiffAug():
     def __init__(self):

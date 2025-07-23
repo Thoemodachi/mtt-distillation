@@ -3,134 +3,100 @@ import argparse
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from utils import get_dataset, get_network, get_daparam,\
-    TensorDataset, epoch, ParamDiffAug
 import copy
-
 import warnings
+
+from utils import get_face_loader, get_network, TensorDataset
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def main(args):
-
-    args.dsa = True if args.dsa == 'True' else False
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    args.dsa_param = ParamDiffAug()
 
-    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, args.subset, args=args)
+    # Load real face data
+    train_loader = get_face_loader(args.train_dir, image_size=args.im_size, batch_size=args.batch_real, shuffle=True)
+    test_loader = get_face_loader(args.test_dir, image_size=args.im_size, batch_size=args.batch_real, shuffle=False)
+    channel = 3
+    im_size = (args.im_size, args.im_size)
+    num_classes = args.num_classes
 
-    # print('\n================== Exp %d ==================\n '%exp)
-    print('Hyper-parameters: \n', args.__dict__)
+    # Prepare real data snapshot arrays
+    images_all, labels_all = [], []
+    for imgs, labs in tqdm(train_loader, desc="Collecting real images"):
+        images_all.append(imgs)
+        labels_all.append(labs)
+    images_all = torch.cat(images_all, dim=0).cpu()
+    labels_all = torch.cat(labels_all, dim=0).cpu()
 
-    save_dir = os.path.join(args.buffer_path, args.dataset)
-    if args.dataset == "ImageNet":
-        save_dir = os.path.join(save_dir, args.subset, str(args.res))
-    if args.dataset in ["CIFAR10", "CIFAR100"] and not args.zca:
-        save_dir += "_NO_ZCA"
-    save_dir = os.path.join(save_dir, args.model)
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
+    dst_train = TensorDataset(copy.deepcopy(images_all), copy.deepcopy(labels_all))
+    trainloader = torch.utils.data.DataLoader(dst_train, batch_size=args.batch_train, shuffle=True)
 
+    criterion = nn.CrossEntropyLoss().to(args.device)  # For FaceNet, VGGFace with classifier
 
-    ''' organize the real dataset '''
-    images_all = []
-    labels_all = []
-    indices_class = [[] for c in range(num_classes)]
-    print("BUILDING DATASET")
-    for i in tqdm(range(len(dst_train))):
-        sample = dst_train[i]
-        images_all.append(torch.unsqueeze(sample[0], dim=0))
-        labels_all.append(class_map[torch.tensor(sample[1]).item()])
-
-    for i, lab in tqdm(enumerate(labels_all)):
-        indices_class[lab].append(i)
-    images_all = torch.cat(images_all, dim=0).to("cpu")
-    labels_all = torch.tensor(labels_all, dtype=torch.long, device="cpu")
-
-    for c in range(num_classes):
-        print('class c = %d: %d real images'%(c, len(indices_class[c])))
-
-    for ch in range(channel):
-        print('real images channel %d, mean = %.4f, std = %.4f'%(ch, torch.mean(images_all[:, ch]), torch.std(images_all[:, ch])))
-
-    criterion = nn.CrossEntropyLoss().to(args.device)
+    # Create save folder
+    save_dir = os.path.join(args.buffer_path, args.model)
+    os.makedirs(save_dir, exist_ok=True)
 
     trajectories = []
 
-    dst_train = TensorDataset(copy.deepcopy(images_all.detach()), copy.deepcopy(labels_all.detach()))
-    trainloader = torch.utils.data.DataLoader(dst_train, batch_size=args.batch_train, shuffle=True, num_workers=0)
+    # Train expert models
+    for it in range(args.num_experts):
+        teacher = get_network(args.model, channel, num_classes, im_size).to(args.device)
+        teacher.train()
+        optimizer = torch.optim.SGD(teacher.parameters(), lr=args.lr_teacher, momentum=args.mom, weight_decay=args.l2)
 
-    ''' set augmentation for whole-dataset training '''
-    args.dc_aug_param = get_daparam(args.dataset, args.model, args.model, None)
-    args.dc_aug_param['strategy'] = 'crop_scale_rotate'  # for whole-dataset training
-    print('DC augmentation parameters: \n', args.dc_aug_param)
-
-    for it in range(0, args.num_experts):
-
-        ''' Train synthetic data '''
-        teacher_net = get_network(args.model, channel, num_classes, im_size).to(args.device) # get a random model
-        teacher_net.train()
-        lr = args.lr_teacher
-        teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)  # optimizer_img for synthetic data
-        teacher_optim.zero_grad()
-
-        timestamps = []
-
-        timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
-
-        lr_schedule = [args.train_epochs // 2 + 1]
+        timestamps = [[p.detach().cpu() for p in teacher.parameters()]]
+        lr_schedule = [args.train_epochs // 2]
 
         for e in range(args.train_epochs):
+            teacher.train()
+            for imgs, labs in trainloader:
+                imgs, labs = imgs.to(args.device), labs.to(args.device)
+                optimizer.zero_grad()
+                if args.model == 'ArcFace':
+                    out = teacher(imgs, labs)  # ArcFace requires both inputs and labels
+                else:
+                    out = teacher(imgs)
+                loss = criterion(out, labs)
+                loss.backward()
+                optimizer.step()
 
-            train_loss, train_acc = epoch("train", dataloader=trainloader, net=teacher_net, optimizer=teacher_optim,
-                                        criterion=criterion, args=args, aug=True)
 
-            test_loss, test_acc = epoch("test", dataloader=testloader, net=teacher_net, optimizer=None,
-                                        criterion=criterion, args=args, aug=False)
+            teacher.eval()
+            timestamps.append([p.detach().cpu() for p in teacher.parameters()])
 
-            print("Itr: {}\tEpoch: {}\tTrain Acc: {}\tTest Acc: {}".format(it, e, train_acc, test_acc))
+            if e in lr_schedule:
+                for g in optimizer.param_groups:
+                    g['lr'] *= 0.1
 
-            timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
-
-            if e in lr_schedule and args.decay:
-                lr *= 0.1
-                teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
-                teacher_optim.zero_grad()
+            print(f"[{it}/{args.num_experts}] Epoch {e}: recorded trajectory.")
 
         trajectories.append(timestamps)
 
-        if len(trajectories) == args.save_interval:
-            n = 0
-            while os.path.exists(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))):
-                n += 1
-            print("Saving {}".format(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))))
-            torch.save(trajectories, os.path.join(save_dir, "replay_buffer_{}.pt".format(n)))
+        # Save buffer
+        if len(trajectories) >= args.save_interval:
+            idx = len(os.listdir(save_dir))
+            fname = f"replay_buffer_{idx}.pt"
+            torch.save(trajectories, os.path.join(save_dir, fname))
+            print("Saved expert buffer:", fname)
             trajectories = []
 
-
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Parameter Processing')
-    parser.add_argument('--dataset', type=str, default='CIFAR10', help='dataset')
-    parser.add_argument('--subset', type=str, default='imagenette', help='subset')
-    parser.add_argument('--model', type=str, default='ConvNet', help='model')
-    parser.add_argument('--res', type=int, default=128, help='resolution for imagenet')
-    parser.add_argument('--num_experts', type=int, default=100, help='training iterations')
-    parser.add_argument('--lr_teacher', type=float, default=0.01, help='learning rate for updating network parameters')
-    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
-    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real loader')
-    parser.add_argument('--dsa', type=str, default='True', choices=['True', 'False'],
-                        help='whether to use differentiable Siamese augmentation.')
-    parser.add_argument('--dsa_strategy', type=str, default='color_crop_cutout_flip_scale_rotate',
-                        help='differentiable Siamese augmentation strategy')
-    parser.add_argument('--data_path', type=str, default='data', help='dataset path')
-    parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train_dir', required=True)
+    parser.add_argument('--test_dir', required=True)
+    parser.add_argument('--model', choices=['FaceNet', 'VGGFace', 'ArcFace'], required=True)
+    parser.add_argument('--buffer_path', required=True)
+    parser.add_argument('--num_experts', type=int, default=10)
     parser.add_argument('--train_epochs', type=int, default=50)
-    parser.add_argument('--zca', action='store_true')
-    parser.add_argument('--decay', action='store_true')
-    parser.add_argument('--mom', type=float, default=0, help='momentum')
-    parser.add_argument('--l2', type=float, default=0, help='l2 regularization')
-    parser.add_argument('--save_interval', type=int, default=10)
+    parser.add_argument('--lr_teacher', type=float, default=0.01)
+    parser.add_argument('--mom', type=float, default=0.9)
+    parser.add_argument('--l2', type=float, default=1e-4)
+    parser.add_argument('--batch_real', type=int, default=256)
+    parser.add_argument('--batch_train', type=int, default=128)
+    parser.add_argument('--im_size', type=int, default=160)
+    parser.add_argument('--save_interval', type=int, default=5)
+    parser.add_argument('--num_classes', type=int, required=True)
 
     args = parser.parse_args()
     main(args)
-
-
