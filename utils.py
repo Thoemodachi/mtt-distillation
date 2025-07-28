@@ -65,30 +65,24 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
     # Dataset-specific configurations
     if dataset_name == 'CelebA':
         channel = 3
-        im_size = (178, 218)  # original CelebA size
-        num_classes = 40  # number of attributes available, adjust if you want identities instead
+        im_size = (160, 160)  # Standard size for CelebA images
+        num_classes = 40  # CelebA has 40 attribute labels
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
+        transform = transforms.Compose([
+            transforms.Resize(im_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        dst_train = datasets.CelebA(data_path, split='train', target_type='identity', download=True, transform=transform)
+        dst_test = datasets.CelebA(data_path, split='test', target_type='identity', download=True, transform=transform)
+        identity_array = dst_train.identity.squeeze().tolist()
+        unique_ids = sorted(set(identity_array))
+        num_classes = len(unique_ids)
 
-        # Compose transforms similarly to other datasets
-        if args.zca:
-            transform = transforms.Compose([
-                transforms.ToTensor()
-            ])
-        else:
-            transform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=mean, std=std)
-            ])
-        
-        # seperating training and testing
-        dst_train = datasets.CelebA(root=data_path, split='train', target_type='attr', transform=transform, download=True)
-        # Example for test split:
-        dst_test = datasets.CelebA(root=data_path, split='test', target_type='attr', transform=transform, download=True)
-
-        class_names = dst_train.attr_names  # list of attribute names
-        class_map = {i: i for i in range(len(class_names))}  # identity mapping for attributes
-        class_map_inv = {i: i for i in range(len(class_names))}
+        class_map = {identity: idx for idx, identity in enumerate(unique_ids)}
+        class_map_inv = {idx: identity for identity, idx in class_map.items()}
+        class_names = unique_ids  # or use string labels if available
     # if dataset_name == 'LFW':
     #     channel = 3
     #     im_size = (250, 250)
