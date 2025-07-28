@@ -81,9 +81,10 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
                 transforms.Normalize(mean=mean, std=std)
             ])
         
-        # Assuming data_path points to 'data/celeba' data_path
-        dst_train = datasets.CelebA(os.path.join(data_path, "train"), transform=transform)
-        dst_test = datasets.CelebA(os.path.join(data_path, "val", "images"), transform=transform)
+        # seperating training and testing
+        dst_train = datasets.CelebA(root=data_path, split='train', target_type='attr', transform=transform, download=True)
+        # Example for test split:
+        dst_test = datasets.CelebA(root=data_path, split='test', target_type='attr', transform=transform, download=True)
 
         class_names = dst_train.attr_names  # list of attribute names
         class_map = {i: i for i in range(len(class_names))}  # identity mapping for attributes
