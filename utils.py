@@ -58,22 +58,9 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
         tuple: Contains dataset configurations and data loaders.
     """
     # Initialize variables
-    channel, im_size, num_classes, class_names, mean, std = None, None, None, None, None, None
-    transform = None
-    dataset_train, dataset_test = None, None
-    loader_train_dict, loader_test = None, None
+    class_map = None
+    loader_train_dict = None
     class_map_inv = None
-
-    # Define common transformations
-    if args.zca:
-        transform = transforms.Compose([transforms.ToTensor()])
-    else:
-        transform = transforms.Compose([
-            transforms.Resize(im_size),
-            transforms.CenterCrop(im_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std)
-        ])
 
     # Dataset-specific configurations
     if dataset_name == 'CelebA':
