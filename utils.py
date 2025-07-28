@@ -94,8 +94,8 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
             ])
         
         # Assuming data_path points to 'data/celeba' data_path
-        dst_train = datasets.CelebA(os.path.join(data_path, "train"), transform=transform, download=True)
-        dst_test = datasets.CelebA(os.path.join(data_path, "val", "images"), transform=transform, download=True)
+        dst_train = datasets.CelebA(os.path.join(data_path, "train"), transform=transform)
+        dst_test = datasets.CelebA(os.path.join(data_path, "val", "images"), transform=transform)
 
         class_names = dst_train.attr_names  # list of attribute names
         class_map = {i: i for i in range(len(class_names))}  # identity mapping for attributes
@@ -135,7 +135,6 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
     else:
         exit('unknown dataset: %s'%dataset_name)
 
-    # Apply ZCA Whitening if specified
     # Apply ZCA Whitening if specified
     if args.zca:
         images = []
