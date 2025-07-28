@@ -99,12 +99,12 @@ def main(args):
 
         trajectories.append(timestamps)
 
-        if len(trajectories) == args.save_interval:
-            n = 0
-            while os.path.exists(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))):
-                n += 1
-            print("Saving {}".format(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))))
-            torch.save(trajectories, os.path.join(save_dir, "replay_buffer_{}.pt".format(n)))
+        # Save buffer
+        if len(trajectories) >= args.save_interval:
+            idx = len(os.listdir(save_dir))
+            fname = f"replay_buffer_{idx}.pt"
+            torch.save(trajectories, os.path.join(save_dir, fname))
+            print("Saved expert buffer:", fname)
             trajectories = []
 
 if __name__ == '__main__':
@@ -124,11 +124,14 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset root folder for CelebA')
     parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
     parser.add_argument('--train_epochs', type=int, default=50)
-    parser.add_argument('--zca', action='store_true')
-    parser.add_argument('--decay', action='store_true')
-    parser.add_argument('--mom', type=float, default=0, help='momentum')
-    parser.add_argument('--l2', type=float, default=0, help='l2 regularization')
-    parser.add_argument('--save_interval', type=int, default=10)
+    parser.add_argument('--lr_teacher', type=float, default=0.01)
+    parser.add_argument('--mom', type=float, default=0.9)
+    parser.add_argument('--l2', type=float, default=1e-4)
+    parser.add_argument('--batch_real', type=int, default=256)
+    parser.add_argument('--batch_train', type=int, default=128)
+    parser.add_argument('--im_size', type=int, default=160)
+    parser.add_argument('--save_interval', type=int, default=5)
+    parser.add_argument('--num_classes', type=int, required=True)
 
     args = parser.parse_args()
     main(args)

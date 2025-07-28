@@ -11,7 +11,10 @@ import kornia as K
 import tqdm
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader, Subset
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader, Subset
 from torchvision import datasets, transforms
+from torchvision.datasets import ImageFolder, LFWPairs, CelebA
 from torchvision.datasets import ImageFolder, LFWPairs, CelebA
 from scipy.ndimage.interpolation import rotate as scipyrotate
 # from networks import FaceNet, VGGFace, ArcFaceNet
@@ -133,33 +136,33 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
         exit('unknown dataset: %s'%dataset_name)
 
     # Apply ZCA Whitening if specified
+    # Apply ZCA Whitening if specified
     if args.zca:
         images = []
         labels = []
-        print("Train ZCA")
-        for i in tqdm.tqdm(range(len(dst_train))):
-            im, lab = dst_train[i]
+        print("Applying ZCA Whitening to training data")
+        for i in tqdm(range(len(dataset_train))):
+            im, lab = dataset_train[i]
             images.append(im)
             labels.append(lab)
         images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
+        labels = torch.tensor(labels, dtype=torch.long, device=args.device)
         zca = K.enhance.ZCAWhitening(eps=0.1, compute_inv=True)
         zca.fit(images)
-        zca_images = zca(images).to("cpu")
-        dst_train = TensorDataset(zca_images, labels)
+        zca_images = zca(images).to(args.device)
+        dataset_train = TensorDataset(zca_images, labels)
 
         images = []
         labels = []
-        print("Test ZCA")
-        for i in tqdm.tqdm(range(len(dst_test))):
-            im, lab = dst_test[i]
+        print("Applying ZCA Whitening to test data")
+        for i in tqdm(range(len(dataset_test))):
+            im, lab = dataset_test[i]
             images.append(im)
             labels.append(lab)
         images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
-
-        zca_images = zca(images).to("cpu")
-        dst_test = TensorDataset(zca_images, labels)
+        labels = torch.tensor(labels, dtype=torch.long, device=args.device)
+        zca_images = zca(images).to(args.device)
+        dataset_test = TensorDataset(zca_images, labels)
 
         args.zca_trans = zca
 
