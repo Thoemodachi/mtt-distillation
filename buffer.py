@@ -124,7 +124,6 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset root folder for CelebA')
     parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
     parser.add_argument('--train_epochs', type=int, default=50)
-    parser.add_argument('--lr_teacher', type=float, default=0.01)
     parser.add_argument('--mom', type=float, default=0.9)
     parser.add_argument('--l2', type=float, default=1e-4)
     parser.add_argument('--batch_real', type=int, default=256)
