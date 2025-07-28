@@ -62,6 +62,7 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
     transform = None
     dataset_train, dataset_test = None, None
     loader_train_dict, loader_test = None, None
+    class_map_inv = None
 
     # Define common transformations
     if args.zca:
@@ -99,7 +100,7 @@ def get_dataset(dataset_name, data_path, batch_size=1, subset=None, args=None):
 
         class_names = dst_train.attr_names  # list of attribute names
         class_map = {i: i for i in range(len(class_names))}  # identity mapping for attributes
-
+        class_map_inv = {i: i for i in range(len(class_names))}
     # if dataset_name == 'LFW':
     #     channel = 3
     #     im_size = (250, 250)
