@@ -3,40 +3,31 @@ import argparse
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-import copy
-import warnings
-
 from utils import get_dataset, get_network, get_daparam,\
     TensorDataset, epoch, ParamDiffAug
+import copy
 
+import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def main(args):
+
     args.dsa = True if args.dsa == 'True' else False
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    args.dsa_param = ParamDiffAug()    
-    
+    args.dsa_param = ParamDiffAug()
+
     channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, args.subset, args=args)
 
-    criterion = nn.CrossEntropyLoss().to(args.device)  # For FaceNet, VGGFace with classifier
+    # print('\n================== Exp %d ==================\n '%exp)
     print('Hyper-parameters: \n', args.__dict__)
 
     save_dir = os.path.join(args.buffer_path, args.dataset)
-
-    # If using LFW or CelebA or MS-Celeb-1M, add dataset-specific subfolders
-    if args.dataset in ["LFW", "CelebA", "MS-Celeb-1M"]:
-        save_dir = os.path.join(save_dir, args.dataset)
-
-    # Optionally include image size, to distinguish settings (e.g., 160 for FaceNet)
-    if hasattr(args, "im_size"):
-        res = args.im_size if isinstance(args.im_size, int) else args.im_size[0]
-        save_dir = os.path.join(save_dir, f"{res}px")
-
-    # Add the model name
+    if args.dataset in ["LFW", "CelebA"] and not args.zca:
+        save_dir += "_NO_ZCA"
     save_dir = os.path.join(save_dir, args.model)
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
 
-    # Ensure folder exists
-    os.makedirs(save_dir, exist_ok=True)
 
     ''' organize the real dataset '''
     images_all = []
@@ -71,48 +62,55 @@ def main(args):
     args.dc_aug_param['strategy'] = 'crop_scale_rotate'  # for whole-dataset training
     print('DC augmentation parameters: \n', args.dc_aug_param)
 
-    # Train expert models
-    for it in range(args.num_experts):
-        teacher = get_network(args.model, channel, num_classes, im_size).to(args.device)
-        teacher.train()
-        optimizer = torch.optim.SGD(teacher.parameters(), lr=args.lr_teacher, momentum=args.mom, weight_decay=args.l2)
+    for it in range(0, args.num_experts):
+
+        ''' Train synthetic data '''
+        teacher_net = get_network(args.model, channel, num_classes, im_size).to(args.device) # get a random model
+        teacher_net.train()
+        lr = args.lr_teacher
+        teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)  # optimizer_img for synthetic data
+        teacher_optim.zero_grad()
+
         timestamps = []
-        timestamps.append([p.detach().cpu() for p in teacher.parameters()])
+
+        timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
+
         lr_schedule = [args.train_epochs // 2 + 1]
 
         for e in range(args.train_epochs):
 
-            train_loss, train_acc = epoch("train", dataloader=trainloader, net=teacher, optimizer=teacher_optim,
+            train_loss, train_acc = epoch("train", dataloader=trainloader, net=teacher_net, optimizer=teacher_optim,
                                         criterion=criterion, args=args, aug=True)
 
-            test_loss, test_acc = epoch("test", dataloader=testloader, net=teacher, optimizer=None,
+            test_loss, test_acc = epoch("test", dataloader=testloader, net=teacher_net, optimizer=None,
                                         criterion=criterion, args=args, aug=False)
 
             print("Itr: {}\tEpoch: {}\tTrain Acc: {}\tTest Acc: {}".format(it, e, train_acc, test_acc))
 
-            timestamps.append([p.detach().cpu() for p in teacher.parameters()])
+            timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
 
             if e in lr_schedule and args.decay:
                 lr *= 0.1
-                teacher_optim = torch.optim.SGD(teacher.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
+                teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
                 teacher_optim.zero_grad()
 
         trajectories.append(timestamps)
 
-        # Save buffer
-        if len(trajectories) >= args.save_interval:
-            idx = len(os.listdir(save_dir))
-            fname = f"replay_buffer_{idx}.pt"
-            torch.save(trajectories, os.path.join(save_dir, fname))
-            print("Saved expert buffer:", fname)
+        if len(trajectories) == args.save_interval:
+            n = 0
+            while os.path.exists(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))):
+                n += 1
+            print("Saving {}".format(os.path.join(save_dir, "replay_buffer_{}.pt".format(n))))
+            torch.save(trajectories, os.path.join(save_dir, "replay_buffer_{}.pt".format(n)))
             trajectories = []
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
     parser.add_argument('--subset', type=str, default=None, help='subset')
     parser.add_argument('--model', type=str, default='VGGFace', help='model')
-    parser.add_argument('--res', type=int, default=128, help='resolution for imagenet')
+    parser.add_argument('--res', type=int, default=128, help='resolution')
     parser.add_argument('--num_experts', type=int, default=100, help='training iterations')
     parser.add_argument('--lr_teacher', type=float, default=0.01, help='learning rate for updating network parameters')
     parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
@@ -130,5 +128,8 @@ if __name__ == '__main__':
     parser.add_argument('--l2', type=float, default=0, help='l2 regularization')
     parser.add_argument('--save_interval', type=int, default=10)
 
+
     args = parser.parse_args()
     main(args)
+
+

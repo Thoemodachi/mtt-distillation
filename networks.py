@@ -1,9 +1,9 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-# from facenet_pytorch import InceptionResnetV1  # pretrained FaceNet
+from facenet_pytorch import InceptionResnetV1  # pretrained FaceNet
 from torchvision import models # pretrained vggface
-# from arcface import ArcFaceLoss  # pretrained ArcFace
+from arcface import ArcFaceLoss  # pretrained ArcFace
 
 # =============================================================================
 # Acknowledgements
@@ -24,13 +24,13 @@ from torchvision import models # pretrained vggface
 # InsightFace project provides the official origin and codebase :contentReference[oaicite:4]{index=4}.
 # =============================================================================
 
-# FaceNet: outputs 512-D embeddings, optionally classification logits
-# class FaceNet(nn.Module):
-#     def __init__(self, num_classes=None, pretrained='vggface2', classify=False):
-#         super().__init__()
-#         self.backbone = InceptionResnetV1(pretrained=pretrained, classify=classify, num_classes=num_classes)
-#     def forward(self, x):
-#         return self.backbone(x)
+# FaceNet: outputs 512-D embeddings
+class FaceNet(nn.Module):
+    def __init__(self, num_classes=None, pretrained='vggface2', classify=False):
+        super().__init__()
+        self.backbone = InceptionResnetV1(pretrained=pretrained, classify=classify, num_classes=num_classes)
+    def forward(self, x):
+        return self.backbone(x)
 
 # VGG‑Face: use torchvision VGG16 and optionally add custom classifier
 class VGGFace(nn.Module):
@@ -57,17 +57,17 @@ class VGGFace(nn.Module):
             return self.class_logits(emb)
         return F.normalize(emb)
 
-# # ArcFace: ResNet-50 backbone + ArcFace margin loss layer
-# class ArcFaceNet(nn.Module):
-#     def __init__(self, num_classes, embedding_size=512, margin=0.5, scale=64):
-#         super().__init__()
-#         self.backbone = models.resnet50(pretrained=True)
-#         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, embedding_size)
-#         self.arcface = ArcFaceLoss(embedding_size, num_classes, margin=margin, scale=scale)
+# ArcFace: ResNet-50 backbone + ArcFace margin loss layer
+class ArcFaceNet(nn.Module):
+    def __init__(self, num_classes, embedding_size=512, margin=0.5, scale=64):
+        super().__init__()
+        self.backbone = models.resnet50(pretrained=True)
+        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, embedding_size)
+        self.arcface = ArcFaceLoss(embedding_size, num_classes, margin=margin, scale=scale)
 
-#     def forward(self, x, labels=None):
-#         emb = self.backbone(x)
-#         emb = F.normalize(emb)
-#         if labels is not None:
-#             return self.arcface(emb, labels)   # returns logits via angular margin
-#         return emb
+    def forward(self, x, labels=None):
+        emb = self.backbone(x)
+        emb = F.normalize(emb)
+        if labels is not None:
+            return self.arcface(emb, labels)   # returns logits via angular margin
+        return emb

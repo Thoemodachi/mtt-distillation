@@ -32,9 +32,8 @@ def main(args):
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     eval_it_pool = np.arange(0, args.Iteration + 1, args.eval_it).tolist()
-
-    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, subset=None, args=args)
-    model_eval_pool = get_eval_pool('F', args.model, args.model)
+    channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(args.dataset, args.data_path, args.batch_real, args.subset, args=args)
+    model_eval_pool = get_eval_pool(args.eval_mode, args.model, args.model)
 
     im_res = im_size[0]
 
@@ -144,9 +143,8 @@ def main(args):
     print('%s training begins'%get_time())
 
     expert_dir = os.path.join(args.buffer_path, args.dataset)
-    if args.dataset == "ImageNet":
-        expert_dir = os.path.join(expert_dir, args.subset, str(args.res))
-    if args.dataset in ["CIFAR10", "CIFAR100"] and not args.zca:
+
+    if args.dataset in ["LFW", "CelebA"] and not args.zca:
         expert_dir += "_NO_ZCA"
     expert_dir = os.path.join(expert_dir, args.model)
     print("Expert Dir: {}".format(expert_dir))
@@ -363,10 +361,7 @@ def main(args):
                 forward_params = student_params[-1].unsqueeze(0).expand(torch.cuda.device_count(), -1)
             else:
                 forward_params = student_params[-1]
-            if args.model == 'ArcFace':
-                x = student_net(x, this_y, flat_param=forward_params)
-            else:
-                x = student_net(x, flat_param=forward_params)
+            x = student_net(x, flat_param=forward_params)
             ce_loss = criterion(x, this_y)
 
             grad = torch.autograd.grad(ce_loss, student_params[-1], create_graph=True)[0]
@@ -414,13 +409,13 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
 
-    parser.add_argument('--dataset', type=str, default='LFW', help='dataset')
+    parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
 
-    parser.add_argument('--subset', type=str, default='imagenette', help='ImageNet subset. This only does anything when --dataset=ImageNet')
+    parser.add_argument('--subset', type=str, default=None, help='ImageNet subset')
 
-    parser.add_argument('--model', type=str, default='FaceNet', help='model')
+    parser.add_argument('--model', type=str, default='VGGFace', help='model')
 
-    parser.add_argument('--res', type=int, default=128, help='resolution for imagenet')
+    parser.add_argument('--res', type=int, default=128, help='resolution')
 
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
 
@@ -453,7 +448,7 @@ if __name__ == '__main__':
     parser.add_argument('--dsa_strategy', type=str, default='color_crop_cutout_flip_scale_rotate',
                         help='differentiable Siamese augmentation strategy')
 
-    parser.add_argument('--data_path', type=str, default='data', help='dataset path')
+    parser.add_argument('--data_path', type=str, default='datasets', help='dataset path')
     parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
 
     parser.add_argument('--expert_epochs', type=int, default=3, help='how many expert epochs the target params are')
