@@ -12,7 +12,7 @@ import tqdm
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 from scipy.ndimage.interpolation import rotate as scipyrotate
-from networks import VGGFace, FaceNet, ArcFaceNet
+from networks import VGGFace#, FaceNet, ArcFaceNet
 
 class Config:
     # Utilise if subsets required, currently not in use
@@ -44,10 +44,14 @@ def get_dataset(dataset, data_path, batch_size=1, subset=None, args=None):
         ])
         dst_train = datasets.CelebA(data_path, split='train', target_type='identity', transform=transform, download=True)
         dst_test = datasets.CelebA(data_path, split='test', target_type='identity', transform=transform, download=True)
-        class_names = dst_train.classes
-        class_map = {x: x for x in range(num_classes)}
+        ids = dst_train.identity.squeeze().tolist()
+        unique_ids = sorted(set(ids))  # should be [1, 2, …, 10177]
+        class_map = {id_: idx for idx, id_ in enumerate(unique_ids)}
+        class_names = [str(id_) for id_ in unique_ids]
+        num_classes = len(unique_ids)
 
-    if dataset == 'LFW':
+
+    elif dataset == 'LFW':
         channel = 3
         im_size = (128, 128)  # choose target dimensions
         num_classes = 5749    # number of unique identities in LFW
