@@ -23,20 +23,19 @@ logging.basicConfig(
 )
 
 def main(args):
-    logging.info("Starting main procedure...")
-
+    
     args.dsa = True if args.dsa == 'True' else False
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
 
-    logging.info(f"Using device: {args.device}")
-    logging.info("Loading dataset...")
+    print(f"Using device: {args.device}")
+    print("Loading dataset...")
 
     channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv = get_dataset(
         args.dataset, args.data_path, args.batch_real, args.subset, args=args
     )
 
-    logging.info(f"Hyper-parameters: {args.__dict__}")
+    print(f"Hyper-parameters: {args.__dict__}")
 
     save_dir = os.path.join(args.buffer_path, args.dataset)
     if args.dataset in ["LFW", "CelebA"] and not args.zca:
@@ -44,31 +43,29 @@ def main(args):
     save_dir = os.path.join(save_dir, args.model)
     os.makedirs(save_dir, exist_ok=True)
 
-    logging.info("Organising real dataset...")
+    print("Organising real dataset...")
     images_all, labels_all = [], []
     indices_class = [[] for _ in range(num_classes)]
-    logging.info("Building dataset (loading samples)...")
+    print("Building dataset (loading samples)...")
 
     for i in tqdm(range(len(dst_train))):
         sample = dst_train[i]
         images_all.append(torch.unsqueeze(sample[0], dim=0))
-        print(f"[DEBUG] sample label (original id): {sample[1]}")
-        print(f"[DEBUG] class_map keys: {list(class_map.keys())}")
-        # labels_all.append(sample[1])  # sample[1] is already remapped label
         labels_all.append(class_map[torch.tensor(sample[1]).item()])
 
     for i, lab in tqdm(enumerate(labels_all)):
         indices_class[lab].append(i)
+
     images_all = torch.cat(images_all, dim=0).to("cpu")
     labels_all = torch.tensor(labels_all, dtype=torch.long, device="cpu")
 
     for c in range(num_classes):
-        logging.info(f"Class {c}: {len(indices_class[c])} real images")
+        print(f"Class {c}: {len(indices_class[c])} real images")
 
     for ch in range(channel):
         mean_val = torch.mean(images_all[:, ch])
         std_val = torch.std(images_all[:, ch])
-        logging.info(f"Channel {ch}: mean={mean_val:.4f}, std={std_val:.4f}")
+        print(f"Channel {ch}: mean={mean_val:.4f}, std={std_val:.4f}")
 
     criterion = nn.CrossEntropyLoss().to(args.device)
     trajectories = []
@@ -78,10 +75,10 @@ def main(args):
 
     args.dc_aug_param = get_daparam(args.dataset, args.model, args.model, None)
     args.dc_aug_param['strategy'] = 'crop_scale_rotate'
-    logging.info(f"DC augmentation parameters: {args.dc_aug_param}")
+    print(f"DC augmentation parameters: {args.dc_aug_param}")
 
     for it in range(0, args.num_experts):
-        logging.info(f"Training expert {it+1}/{args.num_experts}...")
+        print(f"Training expert {it+1}/{args.num_experts}...")
 
         teacher_net = get_network(args.model, channel, num_classes, im_size).to(args.device)
         teacher_net.train()
@@ -98,12 +95,12 @@ def main(args):
             test_loss, test_acc = epoch("test", dataloader=testloader, net=teacher_net,
                                         optimizer=None, criterion=criterion, args=args, aug=False)
 
-            logging.info(f"Expert {it} | Epoch {e} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
+            print(f"Expert {it} | Epoch {e} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
             timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
 
             if e in lr_schedule and args.decay:
                 lr *= 0.1
-                logging.info(f"Learning rate decayed to {lr}")
+                print(f"Learning rate decayed to {lr}")
                 teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
                 teacher_optim.zero_grad()
 
@@ -114,11 +111,11 @@ def main(args):
             while os.path.exists(os.path.join(save_dir, f"replay_buffer_{n}.pt")):
                 n += 1
             save_path = os.path.join(save_dir, f"replay_buffer_{n}.pt")
-            logging.info(f"Saving buffer to {save_path}")
+            print(f"Saving buffer to {save_path}")
             torch.save(trajectories, save_path)
             trajectories = []
 
-    logging.info("Main procedure complete.")
+    print("Main procedure complete.")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
