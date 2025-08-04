@@ -9,111 +9,102 @@ import torch.nn.functional as F
 import os
 import kornia as K
 import tqdm
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 from torchvision import datasets, transforms
+from sklearn.model_selection import train_test_split
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from networks import VGGFace#, FaceNet, ArcFaceNet
 
 class Config:
-    # Utilise if subsets required, currently not in use
-    imagenette = [0, 217, 482, 491, 497, 566, 569, 571, 574, 701]
+    # Selected 10 unique identities from celeba
+    celeba_small = [2880, 2937, 8692, 5805, 9295, 4153, 9040, 6369, 3332, 612]
 
     dict = {
-        "imagenette" : imagenette,
+        "celeba_small": celeba_small,
     }
 
 config = Config()
 
-def get_dataset(dataset, data_path, batch_size=1, subset=None, args=None):
-
+def get_dataset(dataset, data_path, batch_size=1, subset="celeba_small", args=None):
     class_map = None
     loader_train_dict = None
     class_map_inv = None
 
     if dataset == 'CelebA':
         channel = 3
-        im_size = (128, 128)  # Resize to 128x128
-        num_classes = 10177  # Number of identities
+        im_size = (128, 128)
+        num_classes = 10
         mean = [0.485, 0.456, 0.406]
         std = [0.229, 0.224, 0.225]
-        transform = transforms.Compose([
-            transforms.Resize(im_size),
-            transforms.CenterCrop(im_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=mean, std=std),
-        ])
-        dst_train = datasets.CelebA(data_path, split='train', target_type='identity', transform=transform, download=True)
-        dst_test = datasets.CelebA(data_path, split='test', target_type='identity', transform=transform, download=True)
-        ids = dst_train.identity.squeeze().tolist()
-        unique_ids = sorted(set(ids))  # should be [1, 2, …, 10177]
-        class_map = {id_: idx for idx, id_ in enumerate(unique_ids)}
-        class_names = [str(id_) for id_ in unique_ids]
-        num_classes = len(unique_ids)
 
+        if args.zca:
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Resize(im_size),
+                transforms.CenterCrop(im_size)
+            ])
+        else:
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+                transforms.Resize(im_size),
+                transforms.CenterCrop(im_size)
+            ])
 
-    elif dataset == 'LFW':
-        channel = 3
-        im_size = (128, 128)  # choose target dimensions
-        num_classes = 5749    # number of unique identities in LFW
-        transform = transforms.Compose([
-            transforms.Resize(im_size),
-            transforms.CenterCrop(im_size),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5,0.5,0.5], std=[0.5,0.5,0.5]),
-        ])
-        dst_train = datasets.LFWPeople(
-            data_path,
-            split='train',
-            image_set='funneled',
-            transform=transform,
-            download=True
+        # Step 1: Load full CelebA 'all' with identity labels
+        full_data = datasets.CelebA(data_path, split="all", target_type='identity', transform=transform)
+
+        config.subset_ids = config.dict[subset]  # your selected 10 identities
+        id_to_class = {orig_id: idx for idx, orig_id in enumerate(config.subset_ids)}
+
+        # Find all indices matching the subset identities
+        filtered_indices = []
+        for idx in range(len(full_data)):
+            _, label = full_data[idx]
+            if label.item() in config.subset_ids:
+                filtered_indices.append(idx)
+
+        print(f"[DEBUG] Total samples in full dataset: {len(full_data)}")
+        print(f"[DEBUG] Samples matching subset IDs: {len(filtered_indices)}")
+
+        # Create filtered dataset as a subset of full_dataset
+        filtered_dataset = Subset(full_data, filtered_indices)
+
+        # Create remapped labels for filtered dataset (same order as filtered_indices)
+        remapped_labels = []
+        for idx in filtered_indices:
+            _, label = full_data[idx]
+            remapped_labels.append(id_to_class[label.item()])
+
+        # Store remapped labels in filtered_dataset for convenience
+        filtered_dataset.targets = remapped_labels
+
+        # Split filtered dataset indices into train and test
+        train_idx, test_idx = train_test_split(
+            list(range(len(filtered_dataset))),
+            test_size=0.2,
+            stratify=remapped_labels,
+            random_state=42
         )
-        dst_test = datasets.LFWPeople(
-            data_path,
-            split='test',
-            image_set='funneled',
-            transform=transform,
-            download=True
-        )
-        class_names = list(dst_train.class_to_idx.keys())
-        class_map = {class_to_idx: class_to_idx for class_to_idx in dst_train.class_to_idx.values()}
 
+        # Create train and test subsets
+        dst_train = torch.utils.data.Subset(filtered_dataset, train_idx)
+        dst_test = torch.utils.data.Subset(filtered_dataset, test_idx)
+
+        # Assign remapped targets to train/test subsets for convenience
+        dst_train.targets = [remapped_labels[i] for i in train_idx]
+        dst_test.targets = [remapped_labels[i] for i in test_idx]
+
+        print(f"[DEBUG] Train samples after split: {len(dst_train)}")
+        print(f"[DEBUG] Test samples after split: {len(dst_test)}")
+
+        class_map = {x: i for i, x in enumerate(config.subset_ids)}
+        class_map_inv = {i: x for i, x in enumerate(config.subset_ids)}
+        class_names = None
     else:
-        exit('unknown dataset: %s'%dataset)
-
-    if args.zca:
-        images = []
-        labels = []
-        print("Train ZCA")
-        for i in tqdm.tqdm(range(len(dst_train))):
-            im, lab = dst_train[i]
-            images.append(im)
-            labels.append(lab)
-        images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
-        zca = K.enhance.ZCAWhitening(eps=0.1, compute_inv=True)
-        zca.fit(images)
-        zca_images = zca(images).to("cpu")
-        dst_train = TensorDataset(zca_images, labels)
-
-        images = []
-        labels = []
-        print("Test ZCA")
-        for i in tqdm.tqdm(range(len(dst_test))):
-            im, lab = dst_test[i]
-            images.append(im)
-            labels.append(lab)
-        images = torch.stack(images, dim=0).to(args.device)
-        labels = torch.tensor(labels, dtype=torch.long, device="cpu")
-
-        zca_images = zca(images).to("cpu")
-        dst_test = TensorDataset(zca_images, labels)
-
-        args.zca_trans = zca
-
+        exit('unknown dataset: %s' % dataset)
 
     testloader = torch.utils.data.DataLoader(dst_test, batch_size=128, shuffle=False, num_workers=2)
-
 
     return channel, im_size, num_classes, class_names, mean, std, dst_train, dst_test, testloader, loader_train_dict, class_map, class_map_inv
 
@@ -175,6 +166,9 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
     loss_avg, acc_avg, num_exp = 0, 0, 0
     net = net.to(args.device)
 
+    if args.dataset in ["CelebA"]:
+        class_map = {x: i for i, x in enumerate(config.subset_ids)}
+
     if mode == 'train':
         net.train()
     else:
@@ -194,9 +188,13 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
             else:
                 img = augment(img, args.dc_aug_param, device=args.device)
 
+        if args.dataset in ["CelebA"] and mode != "train":
+            lab = torch.tensor([class_map[x.item()] for x in lab]).to(args.device)
+
         n_b = lab.shape[0]
 
         output = net(img)
+
         loss = criterion(output, lab)
 
         acc = np.sum(np.equal(np.argmax(output.cpu().data.numpy(), axis=-1), lab.cpu().data.numpy()))

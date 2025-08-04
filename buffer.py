@@ -52,6 +52,9 @@ def main(args):
     for i in tqdm(range(len(dst_train))):
         sample = dst_train[i]
         images_all.append(torch.unsqueeze(sample[0], dim=0))
+        print(f"[DEBUG] sample label (original id): {sample[1]}")
+        print(f"[DEBUG] class_map keys: {list(class_map.keys())}")
+        # labels_all.append(sample[1])  # sample[1] is already remapped label
         labels_all.append(class_map[torch.tensor(sample[1]).item()])
 
     for i, lab in tqdm(enumerate(labels_all)):
@@ -120,7 +123,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
-    parser.add_argument('--subset', type=str, default=None, help='subset')
+    parser.add_argument('--subset', type=str, default='celeba_small', help='subset')
     parser.add_argument('--model', type=str, default='VGGFace', help='model')
     parser.add_argument('--res', type=int, default=128, help='resolution')
     parser.add_argument('--num_experts', type=int, default=100, help='training iterations')
