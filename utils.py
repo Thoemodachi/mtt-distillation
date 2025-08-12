@@ -163,6 +163,7 @@ def get_time():
 
 
 def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False):
+
     loss_avg, acc_avg, num_exp = 0, 0, 0
     net = net.to(args.device)
 
@@ -179,7 +180,16 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
         lab = datum[1].long().to(args.device)
 
         if mode == "train" and texture:
-            img = torch.cat([torch.stack([torch.roll(im, (torch.randint(args.im_size[0]*args.canvas_size, (1,)), torch.randint(args.im_size[0]*args.canvas_size, (1,))), (1,2))[:,:args.im_size[0],:args.im_size[1]] for im in img]) for _ in range(args.canvas_samples)])
+            img = torch.cat([
+                torch.stack([
+                    torch.roll(im, (
+                        torch.randint(args.im_size[0] * args.canvas_size, (1,)),
+                        torch.randint(args.im_size[0] * args.canvas_size, (1,))
+                    ), (1, 2))[:, :args.im_size[0], :args.im_size[1]]
+                    for im in img
+                ])
+                for _ in range(args.canvas_samples)
+            ])
             lab = torch.cat([lab for _ in range(args.canvas_samples)])
 
         if aug:
@@ -188,20 +198,27 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
             else:
                 img = augment(img, args.dc_aug_param, device=args.device)
 
-        if args.dataset in ["CelebA"] and mode != "train":
+        if args.dataset == "CelebA" and mode != "train":
             lab = torch.tensor([class_map[x.item()] for x in lab]).to(args.device)
 
         n_b = lab.shape[0]
 
-        output = net(img)
+        with torch.set_grad_enabled(mode == 'train'):
+            output = net(img)
+            loss = criterion(output, lab)
 
-        loss = criterion(output, lab)
+        pred = torch.argmax(output.detach(), dim=1)
+        acc = torch.sum(pred == lab).item()
 
-        acc = np.sum(np.equal(np.argmax(output.cpu().data.numpy(), axis=-1), lab.cpu().data.numpy()))
-
-        loss_avg += loss.item()*n_b
+        loss_avg += loss.item() * n_b
         acc_avg += acc
         num_exp += n_b
+
+        # Debug prints
+        print(f"[DEBUG] {mode.title()} Batch {i_batch}: Loss={loss.item():.4f}, Acc={acc / n_b:.4f}")
+        if args.device == 'cuda':
+            print(f"[DEBUG] CUDA Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[DEBUG] CUDA Reserved : {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         if mode == 'train':
             optimizer.zero_grad()
@@ -212,7 +229,6 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
     acc_avg /= num_exp
 
     return loss_avg, acc_avg
-
 
 
 def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, return_loss=False, texture=False):
