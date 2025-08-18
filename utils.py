@@ -196,6 +196,8 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
             if args.dsa:
                 img = DiffAugment(img, args.dsa_strategy, param=args.dsa_param)
             else:
+                if not hasattr(args, 'dc_aug_param'):
+                    args.dc_aug_param = None
                 img = augment(img, args.dc_aug_param, device=args.device)
 
         if args.dataset == "CelebA" and mode != "train":
@@ -250,7 +252,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, 
     loss_train_list = []
 
     for ep in tqdm.tqdm(range(Epoch+1)):
-        loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, aug=True, texture=texture)
+        loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, (not args.no_aug), texture=texture)
         acc_train_list.append(acc_train)
         loss_train_list.append(loss_train)
         if ep == Epoch:
