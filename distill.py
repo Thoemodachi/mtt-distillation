@@ -1,4 +1,5 @@
 import os
+import gc
 import argparse
 import numpy as np
 import torch
@@ -413,6 +414,7 @@ def main(args):
         for p in student_net.parameters():
             p.grad = None
         del student_net, forward_params, x, this_y, grad, param_loss_list, param_dist_list
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()

@@ -1,4 +1,5 @@
 import os
+import gc
 import argparse
 import torch
 import torch.nn as nn
@@ -45,6 +46,10 @@ def main(args):
 
     images_all = torch.cat(images_all, dim=0).to("cpu")
     labels_all = torch.tensor(labels_all, dtype=torch.long, device="cpu")
+    
+    del sample
+    gc.collect()
+    torch.cuda.empty_cache()
 
     for c in range(num_classes):
         print(f"Class {c}: {len(indices_class[c])} real images")
@@ -73,7 +78,7 @@ def main(args):
         teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
         teacher_optim.zero_grad()
 
-        timestamps = [[p.detach().cpu() for p in teacher_net.parameters()]]
+        timestamps = [copy.deepcopy(teacher_net.state_dict())]
         lr_schedule = [args.train_epochs // 2 + 1]
 
         for e in range(args.train_epochs):
@@ -83,13 +88,18 @@ def main(args):
                                         optimizer=None, criterion=criterion, args=args, aug=False)
 
             print(f"Expert {it} | Epoch {e} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
-            timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
+            #     timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
+            timestamps.append(copy.deepcopy(teacher_net.state_dict()))
 
             if e in lr_schedule and args.decay:
                 lr *= 0.1
                 print(f"Learning rate decayed to {lr}")
                 teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
                 teacher_optim.zero_grad()
+            # --- MEMORY CLEANUP ---
+        del teacher_net, teacher_optim  # delete large objects
+        gc.collect()
+        torch.cuda.empty_cache()        # release GPU memory
 
         trajectories.append(timestamps)
 
@@ -100,6 +110,9 @@ def main(args):
             save_path = os.path.join(save_dir, f"replay_buffer_{n}.pt")
             print(f"Saving buffer to {save_path}")
             torch.save(trajectories, save_path)
+            del trajectories
+            gc.collect()
+            torch.cuda.empty_cache()
             trajectories = []
 
     print("Main procedure complete.")

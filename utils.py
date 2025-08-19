@@ -1,6 +1,6 @@
 # adapted from
 # https://github.com/VICO-UoE/DatasetCondensation
-
+import gc
 import time
 import numpy as np
 import torch
@@ -226,6 +226,10 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+        del img, lab, output, loss, pred, n_b
+        if args.device == 'cuda':
+            gc.collect()
+            torch.cuda.empty_cache()
 
     loss_avg /= num_exp
     acc_avg /= num_exp
