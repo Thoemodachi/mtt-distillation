@@ -5,3 +5,5 @@ __pycache__/
 wandb/
 logged_files/
 9gb_per_buffer/
+data_str_error/
+data_str_2/

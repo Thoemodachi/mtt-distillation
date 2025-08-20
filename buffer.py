@@ -77,8 +77,9 @@ def main(args):
         lr = args.lr_teacher
         teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
         teacher_optim.zero_grad()
-
-        timestamps = [copy.deepcopy(teacher_net.state_dict())]
+        
+        timestamps = []
+        timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
         lr_schedule = [args.train_epochs // 2 + 1]
 
         for e in range(args.train_epochs):
@@ -88,18 +89,13 @@ def main(args):
                                         optimizer=None, criterion=criterion, args=args, aug=False)
 
             print(f"Expert {it} | Epoch {e} | Train Acc: {train_acc:.4f} | Test Acc: {test_acc:.4f}")
-            #     timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
-            timestamps.append(copy.deepcopy(teacher_net.state_dict()))
+            timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
 
             if e in lr_schedule and args.decay:
                 lr *= 0.1
                 print(f"Learning rate decayed to {lr}")
                 teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
                 teacher_optim.zero_grad()
-            # --- MEMORY CLEANUP ---
-        del teacher_net, teacher_optim  # delete large objects
-        gc.collect()
-        torch.cuda.empty_cache()        # release GPU memory
 
         trajectories.append(timestamps)
 
@@ -110,9 +106,6 @@ def main(args):
             save_path = os.path.join(save_dir, f"replay_buffer_{n}.pt")
             print(f"Saving buffer to {save_path}")
             torch.save(trajectories, save_path)
-            del trajectories
-            gc.collect()
-            torch.cuda.empty_cache()
             trajectories = []
 
     print("Main procedure complete.")
