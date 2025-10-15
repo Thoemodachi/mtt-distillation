@@ -145,7 +145,7 @@ def main(args):
 
     expert_dir = os.path.join(args.buffer_path, args.dataset)
 
-    if args.dataset in ["LFW", "CelebA"] and not args.zca:
+    if args.dataset in ["CelebA"] and not args.zca:
         expert_dir += "_NO_ZCA"
     expert_dir = os.path.join(expert_dir, args.model)
     print("Expert Dir: {}".format(expert_dir))
@@ -291,12 +291,6 @@ def main(args):
                                 torch.nan_to_num(grid.detach().cpu()))}, step=it)
 
         wandb.log({"Synthetic_LR": syn_lr.detach().cpu()}, step=it)
-        # --- free eval-time GPU allocations ---
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-        # --------------------------------------
 
         student_net = get_network(args.model, channel, num_classes, im_size, dist=False).to(args.device)  # get a random model
 
@@ -399,6 +393,10 @@ def main(args):
 
         grand_loss.backward()
 
+        # Clip both image and learning-rate gradients
+        torch.nn.utils.clip_grad_norm_([image_syn], max_norm=1.0)   # clamp image grads
+        torch.nn.utils.clip_grad_norm_([syn_lr], max_norm=0.1)      # smaller cap for scalar lr
+
         optimizer_img.step()
         optimizer_lr.step()
 
@@ -410,15 +408,6 @@ def main(args):
 
         if it%10 == 0:
             print('%s iter = %04d, loss = %.4f' % (get_time(), it, grand_loss.item()))
-        # --- per-iteration memory cleanup ---
-        for p in student_net.parameters():
-            p.grad = None
-        del student_net, forward_params, x, this_y, grad, param_loss_list, param_dist_list
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-        # ------------------------------------
 
     wandb.finish()
 
@@ -430,36 +419,37 @@ if __name__ == '__main__':
 
     parser.add_argument('--subset', type=str, default='celeba_small', help='celeba subset. This only does anything when --dataset=CelebA')
 
-    parser.add_argument('--model', type=str, default='VGGFace', help='model')
+    parser.add_argument('--model', type=str, default='MobileNetV2',
+                        help='model backbone (VGGFace, MobileNetV2, EfficientNetB0)')
 
-    parser.add_argument('--res', type=int, default=128, help='resolution for celeba')
+    parser.add_argument('--res', type=int, default=32, help='resolution for celeba')
 
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
 
     parser.add_argument('--eval_mode', type=str, default='S',
                         help='eval_mode, check utils.py for more info')
 
-    parser.add_argument('--num_eval', type=int, default=5, help='how many networks to evaluate on')
+    parser.add_argument('--num_eval', type=int, default=2, help='how many networks to evaluate on')
 
-    parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
+    parser.add_argument('--eval_it', type=int, default=2, help='how often to evaluate')
 
-    parser.add_argument('--epoch_eval_train', type=int, default=1000, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=5000, help='how many distillation steps to perform')
+    parser.add_argument('--epoch_eval_train', type=int, default=30, help='epochs to train a model with synthetic data')
+    parser.add_argument('--Iteration', type=int, default=800, help='how many distillation steps to perform')
 
-    parser.add_argument('--lr_img', type=float, default=1000, help='learning rate for updating synthetic images')
-    parser.add_argument('--lr_lr', type=float, default=1e-05, help='learning rate for updating... learning rate')
-    parser.add_argument('--lr_teacher', type=float, default=0.01, help='initialization for synthetic learning rate')
+    parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
+    parser.add_argument('--lr_lr', type=float, default=0.01, help='learning rate for updating... learning rate')
+    parser.add_argument('--lr_teacher', type=float, default=0.015, help='initialization for synthetic learning rate')
 
     parser.add_argument('--lr_init', type=float, default=0.01, help='how to init lr (alpha)')
 
-    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
-    parser.add_argument('--batch_syn', type=int, default=None, help='should only use this if you run out of VRAM')
-    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
+    parser.add_argument('--batch_real', type=int, default=8, help='batch size for real data')
+    parser.add_argument('--batch_syn', type=int, default=8, help='should only use this if you run out of VRAM')
+    parser.add_argument('--batch_train', type=int, default=8, help='batch size for training networks')
 
     parser.add_argument('--pix_init', type=str, default='real', choices=["noise", "real"],
                         help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
 
-    parser.add_argument('--dsa', type=str, default='True', choices=['True', 'False'],
+    parser.add_argument('--dsa', type=str, default='False', choices=['True', 'False'],
                         help='whether to use differentiable Siamese augmentation.')
 
     parser.add_argument('--dsa_strategy', type=str, default='color_crop_cutout_flip_scale_rotate',
@@ -468,28 +458,27 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset path')
     parser.add_argument('--buffer_path', type=str, default='buffers', help='buffer path')
 
-    parser.add_argument('--expert_epochs', type=int, default=3, help='how many expert epochs the target params are')
+    parser.add_argument('--expert_epochs', type=int, default=2, help='how many expert epochs the target params are')
     parser.add_argument('--syn_steps', type=int, default=20, help='how many steps to take on synthetic data')
-    parser.add_argument('--max_start_epoch', type=int, default=25, help='max epoch we can start at')
+    parser.add_argument('--max_start_epoch', type=int, default=4, help='max epoch we can start at')
 
     parser.add_argument('--zca', action='store_true', help="do ZCA whitening")
 
     parser.add_argument('--load_all', action='store_true', help="only use if you can fit all expert trajectories into RAM")
 
-    parser.add_argument('--no_aug', type=bool, default=False, help='this turns off diff aug during distillation')
+    parser.add_argument('--no_aug', type=bool, default=True, help='this turns off diff aug during distillation')
 
     parser.add_argument('--texture', action='store_true', help="will distill textures instead")
     parser.add_argument('--canvas_size', type=int, default=2, help='size of synthetic canvas')
     parser.add_argument('--canvas_samples', type=int, default=1, help='number of canvas samples per iteration')
 
 
-    parser.add_argument('--max_files', type=int, default=None, help='number of expert files to read (leave as None unless doing ablations)')
-    parser.add_argument('--max_experts', type=int, default=None, help='number of experts to read per file (leave as None unless doing ablations)')
+    parser.add_argument('--max_files', type=int, default=1, help='number of expert files to read (leave as None unless doing ablations)')
+    parser.add_argument('--max_experts', type=int, default=1, help='number of experts to read per file (leave as None unless doing ablations)')
 
     parser.add_argument('--force_save', action='store_true', help='this will save images for 50ipc')
 
     args = parser.parse_args()
 
     main(args)
-
 

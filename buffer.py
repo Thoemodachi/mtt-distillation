@@ -26,7 +26,7 @@ def main(args):
     print(f"Hyper-parameters: {args.__dict__}")
 
     save_dir = os.path.join(args.buffer_path, args.dataset)
-    if args.dataset in ["LFW", "CelebA"] and not args.zca:
+    if args.dataset in ["CelebA"] and not args.zca:
         save_dir += "_NO_ZCA"
     save_dir = os.path.join(save_dir, args.model)
     os.makedirs(save_dir, exist_ok=True)
@@ -114,7 +114,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
     parser.add_argument('--subset', type=str, default='celeba_small', help='subset')
-    parser.add_argument('--model', type=str, default='VGGFace', help='model')
+    parser.add_argument('--model', type=str, default='MobileNetV2',
+                        help='model backbone (VGGFace, MobileNetV2, EfficientNetB0)')
     parser.add_argument('--res', type=int, default=128, help='resolution')
     parser.add_argument('--num_experts', type=int, default=100, help='training iterations')
     parser.add_argument('--lr_teacher', type=float, default=0.01, help='learning rate for updating network parameters')
@@ -136,5 +137,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     main(args)
-
 

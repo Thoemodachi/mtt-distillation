@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, Subset
 from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 from scipy.ndimage.interpolation import rotate as scipyrotate
-from networks import VGGFace#, FaceNet, ArcFaceNet
+from networks import VGGFace, MobileNetV2Face, EfficientNetB0Face
 
 class Config:
     # Selected 10 unique identities from celeba
@@ -132,14 +132,14 @@ def get_default_convnet_setting():
 def get_network(model, channel, num_classes, im_size=(32, 32), dist=True):
     torch.random.manual_seed(int(time.time() * 1000) % 100000)
 
-    if model == 'FaceNet':
-        net = FaceNet(num_classes=num_classes, pretrained='vggface2', classify=True)
-
-    elif model == 'VGGFace':
+    if model == 'VGGFace':
         net = VGGFace(embedding_size=512, num_classes=num_classes)
 
-    elif model == 'ArcFace':
-        net = ArcFaceNet(num_classes=num_classes, embedding_size=512, margin=0.5, scale=64)
+    elif model == 'MobileNetV2':
+        net = MobileNetV2Face(embedding_size=256, num_classes=num_classes)
+
+    elif model == 'EfficientNetB0':
+        net = EfficientNetB0Face(embedding_size=256, num_classes=num_classes)
 
     else:
         net = None
@@ -345,16 +345,16 @@ def get_daparam(dataset, model, model_eval, ipc):
         'strategy': 'flip_crop_rotate'
     }
 
-    if dataset in ['CelebA', 'LFW']:
+    if dataset in ['CelebA']:
         dc_aug_param['strategy'] = 'flip_crop_rotate'
-    if model_eval in ['FaceNet', 'VGGFace', 'ArcFace']:
+    if model_eval in ['MobileNetV2', 'VGGFace', 'EfficientNetB0']:
         dc_aug_param['strategy'] = 'flip_crop_rotate'
     return dc_aug_param
 
 
 def get_eval_pool(eval_mode, model, model_eval):
     if eval_mode == 'FR':  # Face Recognition models
-        model_eval_pool = ['VGGFace', 'FaceNet', 'ArcFace']
+        model_eval_pool = ['VGGFace', 'MobileNetV2', 'EfficientNetB0']
     else:
         model_eval_pool = [model_eval]
     return model_eval_pool
