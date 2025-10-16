@@ -237,7 +237,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, 
     net = net.to(args.device)
     images_train = images_train.to(args.device)
     labels_train = labels_train.to(args.device)
-    lr = float(args.lr_net)
+    lr = max(float(args.lr_net), 1e-5)
     Epoch = int(args.epoch_eval_train)
     lr_schedule = [Epoch//2+1]
     optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=0.0005)

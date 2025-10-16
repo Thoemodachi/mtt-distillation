@@ -68,7 +68,7 @@ class MobileNetV2Face(nn.Module):
             backbone = mobilenet_v2(weights=weights)
         dropout_p = getattr(backbone.classifier[0], "p", 0.2)
         self.features = backbone.features
-        self.pool = backbone.avgpool
+        self.pool = getattr(backbone, "avgpool", nn.AdaptiveAvgPool2d((1, 1)))
         self.embedding_head = nn.Sequential(
             nn.Dropout(p=dropout_p),
             nn.Linear(backbone.last_channel, embedding_size),

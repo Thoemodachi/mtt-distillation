@@ -182,6 +182,8 @@ def main(args):
 
     best_std = {m: 0 for m in model_eval_pool}
 
+    finite_eps = 1e-9
+
     for it in range(0, args.Iteration+1):
         save_this_it = False
 
@@ -384,14 +386,38 @@ def main(args):
         param_loss /= num_params
         param_dist /= num_params
 
-        param_loss /= param_dist
+        wandb.log({"Param_Dist": param_dist.detach().cpu()}, step=it)
 
-        grand_loss = param_loss
+        if not torch.isfinite(param_loss).item():
+            print(f"[WARN] Non-finite param loss encountered at iter {it}; skipping update.")
+            del student_params
+            continue
+
+        if not torch.isfinite(param_dist).item():
+            print(f"[WARN] Non-finite param distance encountered at iter {it}; resampling expert.")
+            del student_params
+            continue
+
+        if param_dist.item() < finite_eps:
+            print(f"[WARN] Param distance too small ({param_dist.item():.3e}) at iter {it}; resampling expert.")
+            del student_params
+            continue
+
+        denom = torch.clamp(param_dist.detach(), min=finite_eps)
+        grand_loss = param_loss / denom
+
+        if not torch.isfinite(grand_loss).item():
+            print(f"[WARN] Non-finite grand loss at iter {it}; skipping update.")
+            del student_params
+            continue
 
         optimizer_img.zero_grad()
         optimizer_lr.zero_grad()
 
         grand_loss.backward()
+
+        image_grad = image_syn.grad.detach().norm().item() if image_syn.grad is not None else 0.0
+        lr_grad = syn_lr.grad.detach().abs().item() if syn_lr.grad is not None else 0.0
 
         # Clip both image and learning-rate gradients
         torch.nn.utils.clip_grad_norm_([image_syn], max_norm=1.0)   # clamp image grads
@@ -399,12 +425,20 @@ def main(args):
 
         optimizer_img.step()
         optimizer_lr.step()
+        with torch.no_grad():
+            if not torch.isfinite(image_syn).all().item():
+                print(f"[WARN] Detected non-finite synthetic pixels at iter {it}; projecting back to finite range.")
+                torch.nan_to_num_(image_syn, nan=0.0, posinf=5.0, neginf=-5.0)
+            if not torch.isfinite(syn_lr).item():
+                torch.nan_to_num_(syn_lr, nan=float(args.lr_teacher), posinf=1.0, neginf=1e-5)
+            syn_lr.clamp_(1e-5, 1.0)
 
         wandb.log({"Grand_Loss": grand_loss.detach().cpu(),
-                   "Start_Epoch": start_epoch})
+                   "Start_Epoch": start_epoch,
+                   "Image_Grad_Norm": image_grad,
+                   "LR_Grad_Abs": lr_grad})
 
-        for _ in student_params:
-            del _
+        del student_params
 
         if it%10 == 0:
             print('%s iter = %04d, loss = %.4f' % (get_time(), it, grand_loss.item()))
@@ -433,8 +467,8 @@ if __name__ == '__main__':
 
     parser.add_argument('--eval_it', type=int, default=2, help='how often to evaluate')
 
-    parser.add_argument('--epoch_eval_train', type=int, default=30, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=800, help='how many distillation steps to perform')
+    parser.add_argument('--epoch_eval_train', type=int, default=200, help='epochs to train a model with synthetic data')
+    parser.add_argument('--Iteration', type=int, default=500, help='how many distillation steps to perform')
 
     parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
     parser.add_argument('--lr_lr', type=float, default=0.01, help='learning rate for updating... learning rate')
@@ -442,9 +476,9 @@ if __name__ == '__main__':
 
     parser.add_argument('--lr_init', type=float, default=0.01, help='how to init lr (alpha)')
 
-    parser.add_argument('--batch_real', type=int, default=8, help='batch size for real data')
-    parser.add_argument('--batch_syn', type=int, default=8, help='should only use this if you run out of VRAM')
-    parser.add_argument('--batch_train', type=int, default=8, help='batch size for training networks')
+    parser.add_argument('--batch_real', type=int, default=256, help='batch size for real data')
+    parser.add_argument('--batch_syn', type=int, default=None, help='should only use this if you run out of VRAM')
+    parser.add_argument('--batch_train', type=int, default=256, help='batch size for training networks')
 
     parser.add_argument('--pix_init', type=str, default='real', choices=["noise", "real"],
                         help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
@@ -458,7 +492,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset path')
     parser.add_argument('--buffer_path', type=str, default='buffers', help='buffer path')
 
-    parser.add_argument('--expert_epochs', type=int, default=2, help='how many expert epochs the target params are')
+    parser.add_argument('--expert_epochs', type=int, default=10, help='how many expert epochs the target params are')
     parser.add_argument('--syn_steps', type=int, default=20, help='how many steps to take on synthetic data')
     parser.add_argument('--max_start_epoch', type=int, default=4, help='max epoch we can start at')
 
@@ -473,12 +507,11 @@ if __name__ == '__main__':
     parser.add_argument('--canvas_samples', type=int, default=1, help='number of canvas samples per iteration')
 
 
-    parser.add_argument('--max_files', type=int, default=1, help='number of expert files to read (leave as None unless doing ablations)')
-    parser.add_argument('--max_experts', type=int, default=1, help='number of experts to read per file (leave as None unless doing ablations)')
+    parser.add_argument('--max_files', type=int, default=None, help='number of expert files to read (leave as None unless doing ablations)')
+    parser.add_argument('--max_experts', type=int, default=None, help='number of experts to read per file (leave as None unless doing ablations)')
 
     parser.add_argument('--force_save', action='store_true', help='this will save images for 50ipc')
 
     args = parser.parse_args()
 
     main(args)
-
