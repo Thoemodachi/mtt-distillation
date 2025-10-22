@@ -15,6 +15,13 @@ from sklearn.model_selection import train_test_split
 from scipy.ndimage.interpolation import rotate as scipyrotate
 from networks import VGGFace, MobileNetV2Face, EfficientNetB0Face
 
+# @inproceedings{liu2015faceattributes,
+#   title = {Deep Learning Face Attributes in the Wild},
+#   author = {Liu, Ziwei and Luo, Ping and Wang, Xiaogang and Tang, Xiaoou},
+#   booktitle = {Proceedings of International Conference on Computer Vision (ICCV)},
+#   month = {December},
+#   year = {2015} 
+# }
 class Config:
     # Selected 10 unique identities from celeba
     celeba_small = [2880, 2937, 8692, 5805, 9295, 4153, 9040, 6369, 3332, 612]

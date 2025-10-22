@@ -2,37 +2,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 from torchvision import models  # pretrained models
+from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
+from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
 
-try:
-    from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
-except ImportError:  # torchvision < 0.13 fallback
-    from torchvision.models import mobilenet_v2
 
-    MobileNet_V2_Weights = None  # type: ignore
+# MODEL_ACKNOWLEDGEMENTS = {
+#     "VGGFace": (
+#         "VGG-Face architecture from Parkhi et al., Deep Face Recognition (BMVC 2015); "
+#         "pretrained weights via torchvision."
+#     ),
+#     "MobileNetV2": (
+#         "MobileNetV2 architecture from Sandler et al., MobileNetV2: Inverted Residuals "
+#         "and Linear Bottlenecks (CVPR 2018); pretrained weights via torchvision."
+#     ),
+#     "EfficientNetB0": (
+#         "EfficientNet-B0 architecture from Tan and Le, EfficientNet: Rethinking Model "
+#         "Scaling for Convolutional Neural Networks (ICML 2019); pretrained weights via "
+#         "torchvision."
+#     ),
+# }
 
-try:
-    from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
-except ImportError:  # efficientnet not available in older torchvision
-    efficientnet_b0 = None  # type: ignore
-    EfficientNet_B0_Weights = None  # type: ignore
-
-MODEL_ACKNOWLEDGEMENTS = {
-    "VGGFace": (
-        "VGG-Face architecture from Parkhi et al., Deep Face Recognition (BMVC 2015); "
-        "pretrained weights via torchvision."
-    ),
-    "MobileNetV2": (
-        "MobileNetV2 architecture from Sandler et al., MobileNetV2: Inverted Residuals "
-        "and Linear Bottlenecks (CVPR 2018); pretrained weights via torchvision."
-    ),
-    "EfficientNetB0": (
-        "EfficientNet-B0 architecture from Tan and Le, EfficientNet: Rethinking Model "
-        "Scaling for Convolutional Neural Networks (ICML 2019); pretrained weights via "
-        "torchvision."
-    ),
-}
-
-# VGG‑Face: use torchvision VGG16 and optionally add custom classifier
 class VGGFace(nn.Module):
     def __init__(self, embedding_size=512, num_classes=None):
         super().__init__()
