@@ -1,4 +1,5 @@
 import os
+import gc
 import argparse
 import numpy as np
 import torch
@@ -144,7 +145,7 @@ def main(args):
 
     expert_dir = os.path.join(args.buffer_path, args.dataset)
 
-    if args.dataset in ["LFW", "CelebA"] and not args.zca:
+    if args.dataset in ["CelebA"] and not args.zca:
         expert_dir += "_NO_ZCA"
     expert_dir = os.path.join(expert_dir, args.model)
     print("Expert Dir: {}".format(expert_dir))
@@ -172,7 +173,7 @@ def main(args):
         if args.max_files is not None:
             expert_files = expert_files[:args.max_files]
         print("loading file {}".format(expert_files[file_idx]))
-        buffer = torch.load(expert_files[file_idx])
+        buffer = torch.load(expert_files[file_idx], map_location="cpu")  # keep buffers on CPU
         if args.max_experts is not None:
             buffer = buffer[:args.max_experts]
         random.shuffle(buffer)
@@ -180,6 +181,8 @@ def main(args):
     best_acc = {m: 0 for m in model_eval_pool}
 
     best_std = {m: 0 for m in model_eval_pool}
+
+    finite_eps = 1e-9
 
     for it in range(0, args.Iteration+1):
         save_this_it = False
@@ -194,7 +197,8 @@ def main(args):
                     print('DSA augmentation strategy: \n', args.dsa_strategy)
                     print('DSA augmentation parameters: \n', args.dsa_param.__dict__)
                 else:
-                    print('DC augmentation parameters: \n', args.dc_aug_param)
+                    if hasattr(args, 'dc_aug_param'):
+                        print('DC augmentation parameters: \n', args.dc_aug_param)
 
                 accs_test = []
                 accs_train = []
@@ -245,7 +249,7 @@ def main(args):
 
                 if args.ipc < 50 or args.force_save:
                     upsampled = image_save
-                    if args.dataset != "ImageNet":
+                    if args.dataset != "CelebA":
                         upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
                         upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
                     grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
@@ -256,7 +260,7 @@ def main(args):
                         std = torch.std(image_save)
                         mean = torch.mean(image_save)
                         upsampled = torch.clip(image_save, min=mean-clip_val*std, max=mean+clip_val*std)
-                        if args.dataset != "ImageNet":
+                        if args.dataset != "CelebA":
                             upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
                             upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
                         grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
@@ -270,7 +274,7 @@ def main(args):
                         torch.save(image_save.cpu(), os.path.join(save_dir, "images_zca_{}.pt".format(it)))
 
                         upsampled = image_save
-                        if args.dataset != "ImageNet":
+                        if args.dataset != "CelebA":
                             upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
                             upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
                         grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
@@ -281,7 +285,7 @@ def main(args):
                             std = torch.std(image_save)
                             mean = torch.mean(image_save)
                             upsampled = torch.clip(image_save, min=mean - clip_val * std, max=mean + clip_val * std)
-                            if args.dataset != "ImageNet":
+                            if args.dataset != "CelebA":
                                 upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=2)
                                 upsampled = torch.repeat_interleave(upsampled, repeats=4, dim=3)
                             grid = torchvision.utils.make_grid(upsampled, nrow=10, normalize=True, scale_each=True)
@@ -315,7 +319,7 @@ def main(args):
                 print("loading file {}".format(expert_files[file_idx]))
                 if args.max_files != 1:
                     del buffer
-                    buffer = torch.load(expert_files[file_idx])
+                    buffer = torch.load(expert_files[file_idx], map_location="cpu")  # keep buffers on CPU
                 if args.max_experts is not None:
                     buffer = buffer[:args.max_experts]
                 random.shuffle(buffer)
@@ -382,23 +386,59 @@ def main(args):
         param_loss /= num_params
         param_dist /= num_params
 
-        param_loss /= param_dist
+        wandb.log({"Param_Dist": param_dist.detach().cpu()}, step=it)
 
-        grand_loss = param_loss
+        if not torch.isfinite(param_loss).item():
+            print(f"[WARN] Non-finite param loss encountered at iter {it}; skipping update.")
+            del student_params
+            continue
+
+        if not torch.isfinite(param_dist).item():
+            print(f"[WARN] Non-finite param distance encountered at iter {it}; resampling expert.")
+            del student_params
+            continue
+
+        if param_dist.item() < finite_eps:
+            print(f"[WARN] Param distance too small ({param_dist.item():.3e}) at iter {it}; resampling expert.")
+            del student_params
+            continue
+
+        denom = torch.clamp(param_dist.detach(), min=finite_eps)
+        grand_loss = param_loss / denom
+
+        if not torch.isfinite(grand_loss).item():
+            print(f"[WARN] Non-finite grand loss at iter {it}; skipping update.")
+            del student_params
+            continue
 
         optimizer_img.zero_grad()
         optimizer_lr.zero_grad()
 
         grand_loss.backward()
 
+        image_grad = image_syn.grad.detach().norm().item() if image_syn.grad is not None else 0.0
+        lr_grad = syn_lr.grad.detach().abs().item() if syn_lr.grad is not None else 0.0
+
+        # Clip both image and learning-rate gradients
+        torch.nn.utils.clip_grad_norm_([image_syn], max_norm=1.0)   # clamp image grads
+        torch.nn.utils.clip_grad_norm_([syn_lr], max_norm=0.1)      # smaller cap for scalar lr
+
         optimizer_img.step()
         optimizer_lr.step()
+        with torch.no_grad():
+            if not torch.isfinite(image_syn).all().item():
+                print(f"[WARN] Detected non-finite synthetic pixels at iter {it}; projecting back to finite range.")
+                torch.nan_to_num_(image_syn, nan=0.0, posinf=5.0, neginf=-5.0)
+            if not torch.isfinite(syn_lr).item():
+                torch.nan_to_num_(syn_lr, nan=float(args.lr_teacher), posinf=1.0, neginf=1e-5)
+            syn_lr.clamp_(1e-5, 1.0)
 
         wandb.log({"Grand_Loss": grand_loss.detach().cpu(),
-                   "Start_Epoch": start_epoch})
+                   "Start_Epoch": start_epoch,
+                   "Image_Grad_Norm": image_grad,
+                   "LR_Grad_Abs": lr_grad})
 
-        for _ in student_params:
-            del _
+        del student_params
 
         if it%10 == 0:
             print('%s iter = %04d, loss = %.4f' % (get_time(), it, grand_loss.item()))
@@ -411,27 +451,28 @@ if __name__ == '__main__':
 
     parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
 
-    parser.add_argument('--subset', type=str, default=None, help='ImageNet subset')
+    parser.add_argument('--subset', type=str, default='celeba_small', help='celeba subset. This only does anything when --dataset=CelebA')
 
-    parser.add_argument('--model', type=str, default='VGGFace', help='model')
+    parser.add_argument('--model', type=str, default='MobileNetV2',
+                        help='model backbone (VGGFace, MobileNetV2, EfficientNetB0)')
 
-    parser.add_argument('--res', type=int, default=128, help='resolution')
+    parser.add_argument('--res', type=int, default=32, help='resolution for celeba')
 
     parser.add_argument('--ipc', type=int, default=1, help='image(s) per class')
 
     parser.add_argument('--eval_mode', type=str, default='S',
                         help='eval_mode, check utils.py for more info')
 
-    parser.add_argument('--num_eval', type=int, default=5, help='how many networks to evaluate on')
+    parser.add_argument('--num_eval', type=int, default=2, help='how many networks to evaluate on')
 
-    parser.add_argument('--eval_it', type=int, default=100, help='how often to evaluate')
+    parser.add_argument('--eval_it', type=int, default=2, help='how often to evaluate')
 
-    parser.add_argument('--epoch_eval_train', type=int, default=1000, help='epochs to train a model with synthetic data')
-    parser.add_argument('--Iteration', type=int, default=5000, help='how many distillation steps to perform')
+    parser.add_argument('--epoch_eval_train', type=int, default=200, help='epochs to train a model with synthetic data')
+    parser.add_argument('--Iteration', type=int, default=500, help='how many distillation steps to perform')
 
-    parser.add_argument('--lr_img', type=float, default=1000, help='learning rate for updating synthetic images')
-    parser.add_argument('--lr_lr', type=float, default=1e-05, help='learning rate for updating... learning rate')
-    parser.add_argument('--lr_teacher', type=float, default=0.01, help='initialization for synthetic learning rate')
+    parser.add_argument('--lr_img', type=float, default=0.1, help='learning rate for updating synthetic images')
+    parser.add_argument('--lr_lr', type=float, default=0.01, help='learning rate for updating... learning rate')
+    parser.add_argument('--lr_teacher', type=float, default=0.015, help='initialization for synthetic learning rate')
 
     parser.add_argument('--lr_init', type=float, default=0.01, help='how to init lr (alpha)')
 
@@ -442,24 +483,24 @@ if __name__ == '__main__':
     parser.add_argument('--pix_init', type=str, default='real', choices=["noise", "real"],
                         help='noise/real: initialize synthetic images from random noise or randomly sampled real images.')
 
-    parser.add_argument('--dsa', type=str, default='True', choices=['True', 'False'],
+    parser.add_argument('--dsa', type=str, default='False', choices=['True', 'False'],
                         help='whether to use differentiable Siamese augmentation.')
 
     parser.add_argument('--dsa_strategy', type=str, default='color_crop_cutout_flip_scale_rotate',
                         help='differentiable Siamese augmentation strategy')
 
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset path')
-    parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
+    parser.add_argument('--buffer_path', type=str, default='buffers', help='buffer path')
 
-    parser.add_argument('--expert_epochs', type=int, default=3, help='how many expert epochs the target params are')
+    parser.add_argument('--expert_epochs', type=int, default=10, help='how many expert epochs the target params are')
     parser.add_argument('--syn_steps', type=int, default=20, help='how many steps to take on synthetic data')
-    parser.add_argument('--max_start_epoch', type=int, default=25, help='max epoch we can start at')
+    parser.add_argument('--max_start_epoch', type=int, default=4, help='max epoch we can start at')
 
     parser.add_argument('--zca', action='store_true', help="do ZCA whitening")
 
     parser.add_argument('--load_all', action='store_true', help="only use if you can fit all expert trajectories into RAM")
 
-    parser.add_argument('--no_aug', type=bool, default=False, help='this turns off diff aug during distillation')
+    parser.add_argument('--no_aug', type=bool, default=True, help='this turns off diff aug during distillation')
 
     parser.add_argument('--texture', action='store_true', help="will distill textures instead")
     parser.add_argument('--canvas_size', type=int, default=2, help='size of synthetic canvas')
@@ -474,5 +515,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     main(args)
-
-

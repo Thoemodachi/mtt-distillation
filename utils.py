@@ -1,6 +1,6 @@
 # adapted from
 # https://github.com/VICO-UoE/DatasetCondensation
-
+import gc
 import time
 import numpy as np
 import torch
@@ -13,8 +13,15 @@ from torch.utils.data import Dataset, Subset
 from torchvision import datasets, transforms
 from sklearn.model_selection import train_test_split
 from scipy.ndimage.interpolation import rotate as scipyrotate
-from networks import VGGFace#, FaceNet, ArcFaceNet
+from networks import VGGFace, MobileNetV2Face, EfficientNetB0Face
 
+# @inproceedings{liu2015faceattributes,
+#   title = {Deep Learning Face Attributes in the Wild},
+#   author = {Liu, Ziwei and Luo, Ping and Wang, Xiaogang and Tang, Xiaoou},
+#   booktitle = {Proceedings of International Conference on Computer Vision (ICCV)},
+#   month = {December},
+#   year = {2015} 
+# }
 class Config:
     # Selected 10 unique identities from celeba
     celeba_small = [2880, 2937, 8692, 5805, 9295, 4153, 9040, 6369, 3332, 612]
@@ -132,14 +139,14 @@ def get_default_convnet_setting():
 def get_network(model, channel, num_classes, im_size=(32, 32), dist=True):
     torch.random.manual_seed(int(time.time() * 1000) % 100000)
 
-    if model == 'FaceNet':
-        net = FaceNet(num_classes=num_classes, pretrained='vggface2', classify=True)
-
-    elif model == 'VGGFace':
+    if model == 'VGGFace':
         net = VGGFace(embedding_size=512, num_classes=num_classes)
 
-    elif model == 'ArcFace':
-        net = ArcFaceNet(num_classes=num_classes, embedding_size=512, margin=0.5, scale=64)
+    elif model == 'MobileNetV2':
+        net = MobileNetV2Face(embedding_size=256, num_classes=num_classes)
+
+    elif model == 'EfficientNetB0':
+        net = EfficientNetB0Face(embedding_size=256, num_classes=num_classes)
 
     else:
         net = None
@@ -163,6 +170,7 @@ def get_time():
 
 
 def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False):
+
     loss_avg, acc_avg, num_exp = 0, 0, 0
     net = net.to(args.device)
 
@@ -179,29 +187,47 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
         lab = datum[1].long().to(args.device)
 
         if mode == "train" and texture:
-            img = torch.cat([torch.stack([torch.roll(im, (torch.randint(args.im_size[0]*args.canvas_size, (1,)), torch.randint(args.im_size[0]*args.canvas_size, (1,))), (1,2))[:,:args.im_size[0],:args.im_size[1]] for im in img]) for _ in range(args.canvas_samples)])
+            img = torch.cat([
+                torch.stack([
+                    torch.roll(im, (
+                        torch.randint(args.im_size[0] * args.canvas_size, (1,)),
+                        torch.randint(args.im_size[0] * args.canvas_size, (1,))
+                    ), (1, 2))[:, :args.im_size[0], :args.im_size[1]]
+                    for im in img
+                ])
+                for _ in range(args.canvas_samples)
+            ])
             lab = torch.cat([lab for _ in range(args.canvas_samples)])
 
         if aug:
             if args.dsa:
                 img = DiffAugment(img, args.dsa_strategy, param=args.dsa_param)
             else:
+                if not hasattr(args, 'dc_aug_param'):
+                    args.dc_aug_param = None
                 img = augment(img, args.dc_aug_param, device=args.device)
 
-        if args.dataset in ["CelebA"] and mode != "train":
+        if args.dataset == "CelebA" and mode != "train":
             lab = torch.tensor([class_map[x.item()] for x in lab]).to(args.device)
 
         n_b = lab.shape[0]
 
-        output = net(img)
+        with torch.set_grad_enabled(mode == 'train'):
+            output = net(img)
+            loss = criterion(output, lab)
 
-        loss = criterion(output, lab)
+        pred = torch.argmax(output.detach(), dim=1)
+        acc = torch.sum(pred == lab).item()
 
-        acc = np.sum(np.equal(np.argmax(output.cpu().data.numpy(), axis=-1), lab.cpu().data.numpy()))
-
-        loss_avg += loss.item()*n_b
+        loss_avg += loss.item() * n_b
         acc_avg += acc
         num_exp += n_b
+
+        # Debug prints
+        print(f"[DEBUG] {mode.title()} Batch {i_batch}: Loss={loss.item():.4f}, Acc={acc / n_b:.4f}")
+        if args.device == 'cuda':
+            print(f"[DEBUG] CUDA Allocated: {torch.cuda.memory_allocated() / 1024 ** 2:.2f} MB")
+            print(f"[DEBUG] CUDA Reserved : {torch.cuda.memory_reserved() / 1024 ** 2:.2f} MB")
 
         if mode == 'train':
             optimizer.zero_grad()
@@ -214,12 +240,11 @@ def epoch(mode, dataloader, net, optimizer, criterion, args, aug, texture=False)
     return loss_avg, acc_avg
 
 
-
 def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, return_loss=False, texture=False):
     net = net.to(args.device)
     images_train = images_train.to(args.device)
     labels_train = labels_train.to(args.device)
-    lr = float(args.lr_net)
+    lr = max(float(args.lr_net), 1e-5)
     Epoch = int(args.epoch_eval_train)
     lr_schedule = [Epoch//2+1]
     optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=0.9, weight_decay=0.0005)
@@ -234,7 +259,7 @@ def evaluate_synset(it_eval, net, images_train, labels_train, testloader, args, 
     loss_train_list = []
 
     for ep in tqdm.tqdm(range(Epoch+1)):
-        loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, aug=True, texture=texture)
+        loss_train, acc_train = epoch('train', trainloader, net, optimizer, criterion, args, (not args.no_aug), texture=texture)
         acc_train_list.append(acc_train)
         loss_train_list.append(loss_train)
         if ep == Epoch:
@@ -327,16 +352,16 @@ def get_daparam(dataset, model, model_eval, ipc):
         'strategy': 'flip_crop_rotate'
     }
 
-    if dataset in ['CelebA', 'LFW']:
+    if dataset in ['CelebA']:
         dc_aug_param['strategy'] = 'flip_crop_rotate'
-    if model_eval in ['FaceNet', 'VGGFace', 'ArcFace']:
+    if model_eval in ['MobileNetV2', 'VGGFace', 'EfficientNetB0']:
         dc_aug_param['strategy'] = 'flip_crop_rotate'
     return dc_aug_param
 
 
 def get_eval_pool(eval_mode, model, model_eval):
     if eval_mode == 'FR':  # Face Recognition models
-        model_eval_pool = ['VGGFace', 'FaceNet', 'ArcFace']
+        model_eval_pool = ['VGGFace', 'MobileNetV2', 'EfficientNetB0']
     else:
         model_eval_pool = [model_eval]
     return model_eval_pool

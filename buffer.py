@@ -1,4 +1,5 @@
 import os
+import gc
 import argparse
 import torch
 import torch.nn as nn
@@ -6,24 +7,11 @@ from tqdm import tqdm
 from utils import get_dataset, get_network, get_daparam,\
     TensorDataset, epoch, ParamDiffAug
 import copy
-import logging
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-import logging
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler("buffer_training.log"),
-        logging.StreamHandler()
-    ]
-)
-
 def main(args):
-    
+
     args.dsa = True if args.dsa == 'True' else False
     args.device = 'cuda' if torch.cuda.is_available() else 'cpu'
     args.dsa_param = ParamDiffAug()
@@ -38,7 +26,7 @@ def main(args):
     print(f"Hyper-parameters: {args.__dict__}")
 
     save_dir = os.path.join(args.buffer_path, args.dataset)
-    if args.dataset in ["LFW", "CelebA"] and not args.zca:
+    if args.dataset in ["CelebA"] and not args.zca:
         save_dir += "_NO_ZCA"
     save_dir = os.path.join(save_dir, args.model)
     os.makedirs(save_dir, exist_ok=True)
@@ -58,6 +46,10 @@ def main(args):
 
     images_all = torch.cat(images_all, dim=0).to("cpu")
     labels_all = torch.tensor(labels_all, dtype=torch.long, device="cpu")
+    
+    del sample
+    gc.collect()
+    torch.cuda.empty_cache()
 
     for c in range(num_classes):
         print(f"Class {c}: {len(indices_class[c])} real images")
@@ -85,8 +77,9 @@ def main(args):
         lr = args.lr_teacher
         teacher_optim = torch.optim.SGD(teacher_net.parameters(), lr=lr, momentum=args.mom, weight_decay=args.l2)
         teacher_optim.zero_grad()
-
-        timestamps = [[p.detach().cpu() for p in teacher_net.parameters()]]
+        
+        timestamps = []
+        timestamps.append([p.detach().cpu() for p in teacher_net.parameters()])
         lr_schedule = [args.train_epochs // 2 + 1]
 
         for e in range(args.train_epochs):
@@ -121,7 +114,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Parameter Processing')
     parser.add_argument('--dataset', type=str, default='CelebA', help='dataset')
     parser.add_argument('--subset', type=str, default='celeba_small', help='subset')
-    parser.add_argument('--model', type=str, default='VGGFace', help='model')
+    parser.add_argument('--model', type=str, default='MobileNetV2',
+                        help='model backbone (VGGFace, MobileNetV2, EfficientNetB0)')
     parser.add_argument('--res', type=int, default=128, help='resolution')
     parser.add_argument('--num_experts', type=int, default=100, help='training iterations')
     parser.add_argument('--lr_teacher', type=float, default=0.01, help='learning rate for updating network parameters')
@@ -132,16 +126,15 @@ if __name__ == '__main__':
     parser.add_argument('--dsa_strategy', type=str, default='color_crop_cutout_flip_scale_rotate',
                         help='differentiable Siamese augmentation strategy')
     parser.add_argument('--data_path', type=str, default='datasets', help='dataset path')
-    parser.add_argument('--buffer_path', type=str, default='./buffers', help='buffer path')
+    parser.add_argument('--buffer_path', type=str, default='buffers', help='buffer path')
     parser.add_argument('--train_epochs', type=int, default=50)
     parser.add_argument('--zca', action='store_true')
     parser.add_argument('--decay', action='store_true')
     parser.add_argument('--mom', type=float, default=0, help='momentum')
     parser.add_argument('--l2', type=float, default=0, help='l2 regularization')
-    parser.add_argument('--save_interval', type=int, default=10)
+    parser.add_argument('--save_interval', type=int, default=2)
 
 
     args = parser.parse_args()
     main(args)
-
 
