@@ -6,6 +6,8 @@ This project investigates and builds on top of the original framework to see how
 where CelebA dataset was selected as the baseline. The following deep learning models were used to teach the expert trajectories
 throughout experimentation: MobileNetV2, VGGFace and EfficientNetB0.
 
+![hypothesised_result_comparison](https://github.com/user-attachments/assets/6a6cd73b-6be8-4d79-9c55-436a6fd5f03d)
+
 The goal of this project was to see if MTT-Distillation could apply to specific applications,
 in this case towards facial recognition.
 
