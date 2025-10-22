@@ -1,6 +1,6 @@
-# Dataset Distillation by Matching Training Trajectories
+# Dataset Distillation by Matching Training Trajectories for Facial Recognition
 
-### [Project Page](https://georgecazenavette.github.io/mtt-distillation/) | [Paper](https://arxiv.org/abs/2203.11932)
+### [Original MTT-Distillation Project Page](https://georgecazenavette.github.io/mtt-distillation/) | [Paper](https://arxiv.org/abs/2203.11932)
 <br>
 
 ![Teaser image](docs/all_grid.png)
@@ -8,7 +8,7 @@
 This repo contains code for training expert trajectories and distilling synthetic data from our Dataset Distillation by Matching Training Trajectories paper (CVPR 2022). Please see our [project page](https://georgecazenavette.github.io/mtt-distillation) for more results.
 
 
-> [**Dataset Distillation by Matching Training Trajectories**](https://georgecazenavette.github.io/mtt-distillation/)<br>
+> [**Original Dataset Distillation by Matching Training Trajectories**](https://georgecazenavette.github.io/mtt-distillation/)<br>
 > [George Cazenavette](https://georgecazenavette.github.io/), [Tongzhou Wang](https://ssnl.github.io/), [Antonio Torralba](https://groups.csail.mit.edu/vision/torralbalab/), [Alexei A. Efros](https://people.eecs.berkeley.edu/~efros/), [Jun-Yan Zhu](https://www.cs.cmu.edu/~junyanz/)<br>
 > CMU, MIT, UC Berkeley<br>
 > CVPR 2022 (Oral)
@@ -24,28 +24,21 @@ and back-propagate through all the student network updates to optimize the synth
 
 
 
-## Wearable ImageNet: Synthesizing Tileable Textures
+## Facial Recognition
+The initial MTT-Distillation worked with a set of generic objects, such as animals, objects, etc. 
+This project investigates and builds on top of the original framework to see how MTT-Distillation interacts with facial data,
+where CelebA dataset was selected as the baseline. The following deep learning models were used to teach the expert trajectories
+throughout experimentation: MobileNetV2, VGGFace and EfficientNetB0.
 
-![Teaser image](docs/texture_teaser.png)
-
-Instead of treating our synthetic data as individual images, we can instead encourage every random crop (with circular padding) on a larger canvas of pixels to induce a good training trajectory. This results in class-based textures that are continuous around their edges.
-
-<img src='docs/penguins1_horizontal.png' width=600>
-
-Given these tileable textures, we can apply them to areas that require such properties, such as clothing patterns.
-
-<img src="docs/flamingo_shirt.jpg" width="150"><img src="docs/penguin_shirt.jpg" width="150"><img src="docs/parrot_dress.jpg" width="150"><img src="docs/eagle_jacket.jpg" width="150">
-
-Visualizations made using <a href="https://tri3d.in/">FAB3D</a>
-<br>
-
+The goal of this project was to see if MTT-Distillation could apply to specific applications,
+in this case towards facial recognition.
 
 
 ### Getting Started
 
-First, download our repo:
+First, clone repo:
 ```bash
-git clone https://github.com/GeorgeCazenavette/mtt-distillation.git
+git clone https://github.com/Thoemodachi/mtt-distillation.git
 cd mtt-distillation
 ```
 
@@ -63,7 +56,7 @@ If you have an RTX 20XX GPU (or older), run
 conda env create -f requirements_10_2.yaml
 ```
 
-You can then activate your  conda environment with
+You can then activate your conda environment with
 ```bash
 conda activate distillation
 ```
@@ -75,17 +68,15 @@ If you experience indefinite hanging during training, try running the process wi
 ### Generating Expert Trajectories
 Before doing any distillation, you'll need to generate some expert trajectories using ```buffer.py```
 
-The following command will train 100 ConvNet models on CIFAR-100 with ZCA whitening for 50 epochs each:
+The following command will train 100 MobileNet models on CelebA with ZCA whitening for 50 epochs each:
 ```bash
-python buffer.py --dataset=CIFAR100 --model=ConvNet --train_epochs=50 --num_experts=100 --zca --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
+python buffer.py --dataset=celeba --model=MobileNetV2 --train_epochs=50 --num_experts=100 --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
 ```
-We used 50 epochs with the default learning rate for all of our experts.
-Worse (but still interesting) results can be obtained faster through training fewer experts by changing ```--num_experts```. Note that experts need only be trained once and can be re-used for multiple distillation experiments.
 
 ### Distillation by Matching Training Trajectories
-The following command will then use the buffers we just generated to distill CIFAR-100 down to just 1 image per class:
+The following command will then use the buffers we just generated to distill CelebA down to just 1 image per class:
 ```bash
-python distill.py --dataset=CIFAR100 --ipc=1 --syn_steps=20 --expert_epochs=3 --max_start_epoch=20 --zca --lr_img=1000 --lr_lr=1e-05 --lr_teacher=0.01 --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
+python distill.py --dataset=celeba --ipc=1 --syn_steps=20 --expert_epochs=3 --max_start_epoch=20 --lr_img=0.1 --lr_lr=1e-05 --lr_teacher=0.01 --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
 ```
 
 <img src='docs/animation.gif' width=600>
@@ -95,41 +86,8 @@ Please find a full list of hyper-parameters below:
 ![image](https://user-images.githubusercontent.com/18726777/184226412-7bd0d577-225b-487c-8c9c-23f6462ca7d0.png)
 
 
-### ImageNet
-Our method can also distill subsets of ```ImageNet``` into low-support synthetic sets.
-
-When generating expert trajectories with ```buffer.py``` or distilling the dataset with ```distill.py```, you must designate a named subset of ImageNet with the ```--subset``` flag.
-
-For example,
-
-```bash
-python distill.py --dataset=ImageNet --subset=imagefruit --model=ConvNetD5 --ipc=1 --res=128 --syn_steps=20 --expert_epochs=2 --max_start_epoch=10 --lr_img=1000 --lr_lr=1e-06 --lr_teacher=0.01 --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
-```
-will distill the ```imagefruit``` subset (at 128x128 resolution) into the following 10 images
-
-<img src='docs/imagefruit.png' width=600>
-
-To register your own ImageNet subset, you can add it to the ```Config``` class at the top of ```utils.py```.
-
-Simply create a list with the desired class ID's and add it to the dictionary.
-
-[This gist](https://gist.github.com/yrevar/942d3a0ac09ec9e5eb3a) contains a list of all 1k ImageNet classes and their corresponding numbers.
-
-
-### Texture Distillation
-You can also use the same set of expert trajectories (except those using ZCA) to distill classes into toroidal textures by simply adding the ```--texture``` flag.
-
-For example,
-
-```bash
-python distill.py --texture --dataset=ImageNet --subset=imagesquawk --model=ConvNetD5 --ipc=1 --res=256 --syn_steps=20 --expert_epochs=2 --max_start_epoch=10 --lr_img=1000 --lr_lr=1e-06 --lr_teacher=0.01 --buffer_path={path_to_buffer_storage} --data_path={path_to_dataset}
-```
-will distill the ```imagesquawk``` subset (at 256x256 resolution) into the following 10 textures
-
-<img src='docs/imagesquawk_tex.png' width=600>
-
 ## Acknowledgments
-We would like to thank Alexander Li, Assaf Shocher,  Gokul Swamy, Kangle Deng, Ruihan Gao, Nupur Kumari, Muyang Li, Gaurav Parmar, Chonghyuk Song, Sheng-Yu Wang, and Bingliang Zhang as well as Simon Lucey's Vision Group at the University of Adelaide for their valuable feedback. This work is supported, in part, by the NSF Graduate Research Fellowship under Grant No. DGE1745016 and grants from J.P. Morgan Chase, IBM, and SAP. Our code is adapted from https://github.com/VICO-UoE/DatasetCondensation
+I would like to acknowledge the researchers who created the original MTT-Distillation codebase and conducted the initial research, George Cazenavette, Tongzhou Wang, Antonio Torralba, Alexei A. Efros, Jun-Yan Zhu. They have laid the foundation for the potential many applications of their form of dataset distillation, and their work was what inspired the initialisation of this project. The original MTT-Distillation code is adapted from https://github.com/VICO-UoE/DatasetCondensation and my code is adapted from https://github.com/GeorgeCazenavette/mtt-distillation.
 
 ## Related Work
 <ol>
@@ -156,7 +114,7 @@ We would like to thank Alexander Li, Assaf Shocher,  Gokul Swamy, Kangle Deng, R
 </li>
 </ol>
 
-# Reference
+# Original MTT-Distillation Reference List
 If you find our code useful for your research, please cite our paper.
 ```
 @inproceedings{
@@ -165,15 +123,5 @@ title={Dataset Distillation by Matching Training Trajectories},
 author={George Cazenavette and Tongzhou Wang and Antonio Torralba and Alexei A. Efros and Jun-Yan Zhu},
 booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
 year={2022}
-}
-```
-
-```
-@iniroceedings{
-cazenavette2022textures,
-title={Wearable ImageNet: Synthesizing Tileable Textures via Dataset Distillation},
-author= {George Cazenavette and Tongzhou Wang and Antonio Torralba and Alexei A. Efros and Jun-Yan Zhu},
-booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR) Workshops},
-year={2022},
 }
 ```
