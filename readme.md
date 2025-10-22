@@ -1,5 +1,14 @@
 # Dataset Distillation by Matching Training Trajectories for Facial Recognition
 
+## Facial Recognition
+The initial MTT-Distillation worked with a set of generic objects, such as animals, objects, etc. 
+This project investigates and builds on top of the original framework to see how MTT-Distillation interacts with facial data,
+where CelebA dataset was selected as the baseline. The following deep learning models were used to teach the expert trajectories
+throughout experimentation: MobileNetV2, VGGFace and EfficientNetB0.
+
+The goal of this project was to see if MTT-Distillation could apply to specific applications,
+in this case towards facial recognition.
+
 ### [Original MTT-Distillation Project Page](https://georgecazenavette.github.io/mtt-distillation/) | [Paper](https://arxiv.org/abs/2203.11932)
 <br>
 
@@ -21,18 +30,6 @@ Our method distills the synthetic dataset by directly optimizing the fake images
 real dataset. We train "student" networks for many iterations on the synthetic data,
 measure the error in parameter space between the "student" and "expert" networks trained on real data,
 and back-propagate through all the student network updates to optimize the synthetic pixels.
-
-
-
-## Facial Recognition
-The initial MTT-Distillation worked with a set of generic objects, such as animals, objects, etc. 
-This project investigates and builds on top of the original framework to see how MTT-Distillation interacts with facial data,
-where CelebA dataset was selected as the baseline. The following deep learning models were used to teach the expert trajectories
-throughout experimentation: MobileNetV2, VGGFace and EfficientNetB0.
-
-The goal of this project was to see if MTT-Distillation could apply to specific applications,
-in this case towards facial recognition.
-
 
 ### Getting Started
 
